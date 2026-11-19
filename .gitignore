@@ -25,3 +25,6 @@ __pycache__/
 *.pyc
 
 /thirdparty/aa/
+*.lnk
+launcher/*/bin/
+launcher/*/obj/

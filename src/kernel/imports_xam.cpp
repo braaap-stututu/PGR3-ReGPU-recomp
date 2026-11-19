@@ -508,6 +508,24 @@ int XInputIndex(uint32_t user)
     return i >= 0 && i < XUSER_MAX_COUNT ? i : -1;
 }
 
+// XInputGetState for a slot with no pad enumerates the devices every call (CM_Get_Device_Interface_List: ~2% of the
+// game's main thread in a race, the game reads every user each frame; session 4). An empty slot is asked again once
+// a second, so a pad plugged in shows up within that. PGR3_XINPUT_POLL_ALWAYS=1 (live): every call, as before.
+std::atomic<int64_t> g_padEmptyUntil[XUSER_MAX_COUNT];
+bool PadSlotKnownEmpty(int pad)
+{
+    static LiveSwitch always("PGR3_XINPUT_POLL_ALWAYS");
+    return !always && GetTickCount64() < uint64_t(g_padEmptyUntil[pad].load(std::memory_order_relaxed));
+}
+DWORD CachedXInputGetState(int pad, XINPUT_STATE* x)
+{
+    if (PadSlotKnownEmpty(pad))
+        return ERROR_DEVICE_NOT_CONNECTED;
+    const DWORD r = XInputGetState(DWORD(pad), x);
+    g_padEmptyUntil[pad].store(r == ERROR_DEVICE_NOT_CONNECTED ? int64_t(GetTickCount64() + 1000) : 0, std::memory_order_relaxed);
+    return r;
+}
+
 // Returns false if nothing is connected for this user. gameRead: the game reads the state (not its
 // capabilities or vibration), which moves a wheel's H-pattern gear request on.
 bool ReadPad(uint32_t user, PadState& s, bool gameRead = true)
@@ -526,7 +544,7 @@ bool ReadPad(uint32_t user, PadState& s, bool gameRead = true)
         s.rx = p.rx;
         s.ry = p.ry;
     }
-    else if (const int pad = isWheel ? -1 : XInputIndex(user); pad >= 0 && XInputGetState(DWORD(pad), &x) == ERROR_SUCCESS)
+    else if (const int pad = isWheel ? -1 : XInputIndex(user); pad >= 0 && CachedXInputGetState(pad, &x) == ERROR_SUCCESS)
     {
         connected = true;
         s.buttons = x.Gamepad.wButtons; // same bit layout as the 360
@@ -875,7 +893,7 @@ GUEST_EXPORT(XamInputSetState)
         return;
     }
     // A racing wheel's rumble isn't played (no force feedback yet); a pad's goes to its XInput pad.
-    if (const int pad = XInputIndex(user); ctx.r5.u32 && pad >= 0 && int(user) >= WheelInput().Wheels())
+    if (const int pad = XInputIndex(user); ctx.r5.u32 && pad >= 0 && int(user) >= WheelInput().Wheels() && !PadSlotKnownEmpty(pad))
     {
         XINPUT_VIBRATION v{};
         v.wLeftMotorSpeed = __builtin_bswap16(*GuestPtr<uint16_t>(ctx.r5.u32));

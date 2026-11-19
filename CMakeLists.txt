@@ -12,6 +12,13 @@ if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     message(FATAL_ERROR "pgr3 needs clang-cl (the recompiled code uses clang builtins)")
 endif()
 find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
+# MSVC's <atomic> (14.4x) marks every function target("cx16") under clang, and clang never inlines a function into a
+# caller with fewer target features: without -mcx16 every std::atomic load/store/increment was an out-of-line call
+# (~300 call sites in ReGPU's hot paths). Every x64 CPU Windows 8.1+ runs on has CMPXCHG16B. PGR3 session 4.
+option(PGR3_NO_CX16 "build without -mcx16 (A/B)" OFF)
+if(NOT PGR3_NO_CX16)
+    add_compile_options(-mcx16)
+endif()
 
 # The recompiler is ReXenon (thirdparty/ReXenon), the only one this port uses: out/ppc from tools/recomp.ps1.
 # Its timebase comes from PPC_MFTB() in src/ppc_hooks.h.
@@ -67,6 +74,11 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/thirdparty/meshoptimizer/src/meshoptimizer.h")
     set(REGPU_MESHOPT_DIR "${CMAKE_SOURCE_DIR}/thirdparty/meshoptimizer" CACHE PATH "" FORCE)
 endif()
 add_subdirectory("${CMAKE_SOURCE_DIR}/thirdparty/ReGPU" regpu)
+# Extra compile flags for ReGPU (A/B of code generation, e.g. -DPGR3_REGPU_FLAGS="-mllvm;-inline-threshold=1000").
+set(PGR3_REGPU_FLAGS "" CACHE STRING "extra compile options for the regpu library")
+if(PGR3_REGPU_FLAGS)
+    target_compile_options(regpu PRIVATE ${PGR3_REGPU_FLAGS})
+endif()
 
 add_executable(pgr3 ${PGR3_SOURCES})
 target_include_directories(pgr3 PRIVATE src "${PGR3_PPC_DIR}" ${PGR3_XENON_DIR}/thirdparty/simde)

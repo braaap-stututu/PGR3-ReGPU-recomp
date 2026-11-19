@@ -191,7 +191,9 @@ void Load()
         g_settings.msaa = 1;
     g_settings.width = std::clamp<uint32_t>(g_settings.width, 640, 15360);
     g_settings.height = std::clamp<uint32_t>(g_settings.height, 360, 8640);
-    g_settings.maxFps = std::clamp<uint32_t>(g_settings.maxFps ? g_settings.maxFps : 60, 30, 360);
+    // (PGR3_MAX_FPS, for measuring, may go to 1000: at 360 the benchmark race reached the cap in its lighter stretches
+    // by session 4. settings.ini stays at 30-360.)
+    g_settings.maxFps = std::clamp<uint32_t>(g_settings.maxFps ? g_settings.maxFps : 60, 30, getenv("PGR3_MAX_FPS") ? 1000 : 360);
     if (g_settings.profile.empty())
         g_settings.profile = "Player";
 }

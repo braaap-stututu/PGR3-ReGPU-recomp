@@ -12,10 +12,10 @@ x64, built on [ReXenon](https://github.com/zer0ducksgiven/ReXenon) (the recompil
 - Recompiled: 16,630 functions, no unresolved branches.
 - Boots through the intro movies, menus, car purchase and garage into a race, with sound. The London race matches the
   console.
-- The console's 30 fps lock is removed: an AI-driven benchmark race runs at ~296 fps uncapped at 720p on an
+- The console's 30 fps lock is removed: an AI-driven benchmark race runs at ~389 fps uncapped at 720p (370 at 1440p with 4x MSAA) on an
   RX 7900 XTX (29.7 fps locked).
 - Still to do: stretching the 1024x600 race picture to the window, the rest of the race against the console, a few
-  system calls, intro skip, DLC, saves, a launcher.
+  system calls, intro skip, DLC, saves.
 
 ## Layout
 
@@ -25,6 +25,7 @@ x64, built on [ReXenon](https://github.com/zer0ducksgiven/ReXenon) (the recompil
 | `config/` | ReXenon configuration: function boundaries and jump tables for the disc `default.xex` |
 | `patches/` | Our patch stacks on ReGPU and ReXenon (`patches/README.md` lists each one and why) |
 | `tools/` | Setup, recompile, XEX/ISO tools, debug-server client, test grid, benchmark and A/B scripts |
+| `launcher/` | The launcher (.NET 9, Photino + WebView2), ported from our FM3 one: Play, Graphics, Benchmark, Settings |
 | `thirdparty/` | ReGPU, ReXenon, meshoptimizer (submodules; patched by `tools/setup.ps1`) |
 | `NOTES.md` | Session notes: current state, findings, every fix and measurement |
 | `PLAN.md`, `PGR3-QUIRKS.md` | The plan and the game's known quirks |
@@ -40,5 +41,6 @@ copy game\disc\default.xex game\default.xex
 .\tools\recomp.ps1 -Base      # game\default.xex -> out\ppc (checks the Europe disc's SHA-256)
 cmd /c "tools\vcenv.cmd cmake -S . -B build\rel -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl"
 cmd /c "tools\vcenv.cmd ninja -C build\rel"
-play.cmd                      # saves and settings in out\user, log in out\run\pgr3.log
+launcher.cmd                  # the launcher (builds it on first use; needs the .NET 9 SDK), or:
+play.cmd                      # straight into the game; both keep saves and settings in out\user, the log in out\run\pgr3.log
 ```

@@ -1,7 +1,7 @@
 # Live A/B on the frozen grid (PGR3 session 3).
 #
 #   . .\tools\ab.ps1
-#   Start-Pgr3AbGrid [-Env @{...}]                   # uncapped (360, vsync off, vblank 1000) frozen grid, minimized
+#   Start-Pgr3AbGrid [-Env @{...}]                   # uncapped (360, vsync off, vblank default 4000) frozen grid, minimized
 #   Invoke-Pgr3AB REGPU_NAME [-Rounds 4] [-Seconds 5] [-Settle 3]      # live ReGPU switch 0 vs 1, interleaved
 #   Invoke-Pgr3AB PGR3_NAME -Env                     # a PGR3_* live switch (debug server "env")
 #   Measure-Pgr3Fps [-Seconds 5] [-Settle 3]         # average fps of the perf lite lines over the next N seconds
@@ -39,8 +39,13 @@ function Measure-Pgr3Fps([int]$Seconds = 5, [int]$Settle = 3) {
 }
 
 function Start-Pgr3AbGrid([hashtable]$Env = @{}) {
-  $vars = @{ PGR3_MAX_FPS = '360'; PGR3_VSYNC = '0'; PGR3_VBLANK_HZ = '1000'; REGPU_PERF_LITE = '1' }
+  $vars = @{ PGR3_MAX_FPS = '360'; PGR3_VSYNC = '0'; REGPU_PERF_LITE = '1' } # (vblank: the uncapped default, 4000 Hz)
   foreach ($k in $Env.Keys) { $vars[$k] = $Env[$k] }
+  # PGR3_AB_EXE=<path>: boot that exe instead of build\rel\pgr3.exe (a copy of an older build with its DLLs, kept
+  # in its own folder so the process is still named pgr3), for a boot A/B of a code change without a switch.
+  $exe = Join-Path $AbRoot 'build\rel\pgr3.exe'
+  if ($vars.ContainsKey('PGR3_AB_EXE')) { $exe = $vars['PGR3_AB_EXE']; $vars.Remove('PGR3_AB_EXE') }
+  $script:Pgr3DevExe = $exe
   Start-Pgr3Grid -Env $vars | Out-Null
   for ($i = 0; $i -lt 90; $i++) {
     Start-Sleep 1

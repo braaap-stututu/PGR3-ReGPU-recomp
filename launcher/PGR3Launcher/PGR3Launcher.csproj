@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The PGR3 launcher, ported from the FM3 ReGPU launcher (launcher/FM3Launcher in our FM3 recomp, itself from the FM4
+       one): a Photino window showing wwwroot (the UI) on WebView2. The page talks to Bridge.cs over the window's message
+       channel (no local server). Kept to what PGR3 uses: Play, Graphics, Benchmark, Settings. Build: dotnet build -c
+       Release (launcher.cmd does it on first use). -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>PGR3Launcher</AssemblyName>
+    <RootNamespace>PGR3Launcher</RootNamespace>
+    <Product>Project Gotham Racing 3 ReGPU</Product>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <Version Condition="'$(Version)' == ''">0.4.0</Version>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Photino.NET" Version="4.0.16" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="wwwroot\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

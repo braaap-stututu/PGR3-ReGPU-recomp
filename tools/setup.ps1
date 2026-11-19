@@ -102,6 +102,11 @@ $regpuPatches = @(
     'regpu-cf-jump-past-end'         # PGR3 port: control flow after the first exec end is parsed for jump/loop targets too, not only calls (REGPU_NO_JUMP_PAST_END=1 old)
     'regpu-drain-switches'           # PGR3 port: live test switches REGPU_NO_WAIT_DRAIN / REGPU_NO_INTERRUPT_DRAIN (command processor runs on without draining the draw thread; off by default)
     'regpu-vblank-hz-4000'           # PGR3 port: REGPU_VBLANK_HZ accepted up to 4000 (was 1000): PGR3 uncapped runs its vblank at 2000 Hz
+    'regpu-draw-thread-lean'         # PGR3 port: LiveSwitch reads inlined (+10.7%), 4-lane ContentHash, relaxed draw count
+    'regpu-ring-chunks'              # PGR3 port: small ring allocations from a per-thread 64 KB chunk (one locked CAS per chunk): +2.6%
+    'regpu-cp-wait-detail'           # PGR3 port: REGPU_PERF's CP wait lines also give the reference, mask and wait counts (diagnostic)
+    'regpu-vblank-on-wait'           # PGR3 port: REGPU_VBLANK_ON_WAIT: a blocked memory WAIT_REG_MEM raises the next vblank at once (PGR3 uncapped: +9% grid)
+    'regpu-cp-handoff'               # PGR3 port: CP/draw-thread waits spin before sleeping (REGPU_HANDOFF_SPIN), vblank kicked before a wait's drain, drain timing per site (REGPU_PERF)
 )
 
 function Invoke-Git { & git @args; if ($LASTEXITCODE -ne 0) { throw "git $args failed ($LASTEXITCODE)" } }

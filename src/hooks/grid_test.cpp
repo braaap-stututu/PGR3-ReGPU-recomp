@@ -61,9 +61,10 @@ void StartBenchmarkClock()
         const char* s = getenv("PGR3_BENCHMARK_SETTLE");
         const int settle = s ? std::max(0, atoi(s)) : 10;
         Sleep(DWORD(settle) * 1000);
-        Log("benchmark: measuring %d s (from %d s after GO)", BenchmarkSeconds(), settle);
+        // (with the game clock, frame_time.cpp: it must advance as fast as the wall clock at any frame rate)
+        Log("benchmark: measuring %d s (from %d s after GO; game time %.3f s)", BenchmarkSeconds(), settle, FrameTimeGameClock());
         Sleep(DWORD(BenchmarkSeconds()) * 1000);
-        Log("benchmark: done");
+        Log("benchmark: done (game time %.3f s)", FrameTimeGameClock());
         Sleep(1500); // (one more perf lite line, and the log written)
         EnumWindows(CloseOurWindow, 0);
     }).detach();

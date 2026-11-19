@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Project Gotham Racing 3 ReGPU</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <svg class="mark" viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" rx="8" fill="#1d2a3a"/><text x="20" y="27" text-anchor="middle" font-family="Segoe UI, sans-serif" font-weight="800" font-size="18" fill="#ff9a3c">P3</text></svg>
+      <div>
+        <div class="logo">PGR3:<span>ReGPU</span></div>
+        <div class="tag" id="version">Native PC port</div>
+      </div>
+    </div>
+    <nav class="tabs" id="tabs">
+      <button data-tab="play" class="on">Play</button>
+      <button data-tab="graphics">Graphics</button>
+      <button data-tab="settings">Settings</button>
+    </nav>
+    <div class="chips" id="chips"></div>
+  </header>
+
+  <!-- PLAY -->
+  <main class="page grid2" id="page-play">
+    <section class="panel tiles-panel">
+      <div class="panel-head"><h2>Game files</h2></div>
+      <p class="hint">Needs Project Gotham Racing 3 (Europe): the disc's files, extracted (default.xex and the data folders). In this source checkout they are in game\disc (tools\xiso.py, README.md).</p>
+      <div class="tiles">
+        <div class="tile" id="tile-game">
+          <svg class="tile-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="2.4" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 3a9 9 0 0 1 7.8 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" opacity=".5"/></svg>
+          <span class="tile-title">Game</span>
+          <div class="tile-bar"><i id="game-bar"></i></div>
+          <span class="tile-status" id="tile-game-status"></span>
+          <input id="gameFolder" class="tile-path" readonly data-tip="The game folder the game starts from.">
+          <div class="tile-links">
+            <button class="link" id="gameBrowse" data-tip="Pick the folder with the disc's files. Its default.xex is checked first.">Folder…</button>
+            <button class="link" id="gameCheck" data-tip="Checks that default.xex in the game folder is the one this port is built from (Europe disc, version 0xB).">Check game files</button>
+            <button class="link" id="gameReset" data-tip="Go back to the default game folder (game\disc).">Reset</button>
+            <button class="link" data-open="game" data-tip="Opens the game folder.">Open folder</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Game</h2></div>
+      <label class="field" data-tip="The language of the game's menus and text. Only English has been played on PGR3 so far.">
+        <span>Language</span>
+        <select id="language"></select>
+      </label>
+      <p class="hint">Work in progress: boot, menus, car purchase and races run, with sound; the London race matches the console. The race picture is drawn at your resolution's scale but centred, not yet stretched to the window. Saves and settings live in the user folder (Settings tab). Controls: an Xbox controller, or the keyboard as player 1.</p>
+    </section>
+
+    <section class="panel launch-panel">
+      <div class="panel-head"><h2>Ready</h2></div>
+      <div class="summary" id="summary"></div>
+      <div class="checklist" id="checklist"></div>
+      <div class="launch-box">
+        <button class="launch" id="launch" data-tip="Saves these settings and starts the game.">Play</button>
+        <div class="status" id="status"></div>
+      </div>
+    </section>
+  </main>
+
+  <!-- GRAPHICS -->
+  <main class="page grid3" id="page-graphics" hidden>
+    <div class="stack">
+    <section class="panel">
+      <div class="panel-head"><h2>Performance</h2></div>
+      <label class="field" data-tip="The limit on the frames shown. With VSync on, the display's refresh rate also limits it. PGR3 runs its game clock by time, so any rate plays at the right speed (the console ran at 30 fps).">
+        <span>Max FPS</span>
+        <select id="maxFps"></select>
+      </label>
+      <label class="field" id="customFpsField" data-tip="Any cap from 30 to 360 fps." hidden>
+        <span>Custom FPS cap</span>
+        <input id="customFps" type="number" min="30" max="360" step="1">
+      </label>
+      <div class="toggle-row" data-tip="Waits for the display's refresh: no tearing, slightly more input lag.">
+        <div><div class="toggle-title">VSync</div><div class="toggle-sub">Sync frames to the display</div></div>
+        <button class="switch" id="vsync" role="switch"></button>
+      </div>
+      <label class="field" data-tip="Trades picture for speed (ReGPU's Hyper presets). Mild, Low and Extreme draw the 3D scene smaller and lower texture filtering. Potato keeps full resolution, makes the shaders faster and skips tiny far objects: made for integrated GPUs. Auto picks Potato on an integrated GPU. Untested on PGR3 so far. Applies at the next start.">
+        <span>Speed preset <b id="perfPreset-v"></b></span>
+        <input type="range" id="perfPreset" min="0" max="5" step="1">
+      </label>
+      <div class="hint" id="perfPreset-note"></div>
+    </section>
+    <section class="panel">
+      <div class="panel-head"><h2>Upscaler</h2></div>
+      <label class="field" data-tip="Draws the 3D scene at a lower resolution and scales it up; the HUD stays full size. Faster on a weak graphics card, a little softer. Not tested on PGR3 yet.">
+        <span>Upscaler (experimental)</span>
+        <select id="upscaler"></select>
+      </label>
+      <label class="field" id="upscaleField" data-tip="How much smaller the 3D scene is drawn: Quality about 1.5x, Balanced 1.7x, Performance 2x, Ultra performance 3x smaller on each side.">
+        <span>Upscaler quality</span>
+        <select id="upscale"></select>
+      </label>
+      <label class="field" id="sharpeningField" data-tip="Sharpening of the upscaled scene.">
+        <span>Sharpening</span>
+        <select id="sharpening"></select>
+      </label>
+    </section>
+    </div>
+    <section class="panel">
+      <div class="panel-head"><h2>Display</h2></div>
+      <label class="field" data-tip="The graphics card the game renders on. Automatic is the one Windows picks. Applies at the next start.">
+        <span>Graphics card</span>
+        <select id="gpu"></select>
+      </label>
+      <label class="field" data-tip="The size the game renders at. PGR3's races draw a 1024x600 picture on the console; here it is drawn at this resolution's scale (for now centred, not yet stretched to the window).">
+        <span>Resolution</span>
+        <select id="resolution"></select>
+      </label>
+      <label class="field" data-tip="Forces a picture shape. Auto follows the resolution (never narrower than 16:9).">
+        <span>Aspect ratio</span>
+        <select id="aspect"></select>
+      </label>
+      <div class="field">
+        <span>Display mode</span>
+        <div class="segmented" id="display">
+          <button data-full="0" data-tip="A normal window you can move and resize.">Windowed</button>
+          <button data-full="1" data-tip="Fills the main display without changing its mode.">Fullscreen</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Anti-aliasing &amp; image</h2></div>
+      <label class="field" id="msaaField" data-tip="Multisample anti-aliasing: smooths the edges of objects as they are drawn. 4x at 1440p costs nothing on an RX 7900 XTX (session 4).">
+        <span>MSAA</span>
+        <select id="msaa"></select>
+      </label>
+      <label class="field" data-tip="A filter that smooths edges on the finished 3D picture, before the HUD. FXAA: fastest, softest. SMAA: sharper. CMAA 2: the sharpest. TAA: the smoothest, can leave faint trails. Untested on PGR3. Read when the game starts.">
+        <span>Edge filter</span>
+        <select id="aa"></select>
+      </label>
+      <label class="field" id="ssaaField" data-tip="Supersampling: every frame drawn larger and shrunk to your resolution. The most expensive option: 1.5x draws 2.25 times the pixels, 2x four times. Not with an upscaler.">
+        <span>Supersampling (SSAA)</span>
+        <select id="ssaa"></select>
+      </label>
+      <div class="toggle-row" id="eqaaRow" data-tip="AMD's enhanced quality anti-aliasing with MSAA, where the driver offers it.">
+        <div><div class="toggle-title">EQAA</div><div class="toggle-sub">With MSAA, AMD cards</div></div>
+        <button class="switch" id="eqaa" role="switch"></button>
+      </div>
+      <div class="toggle-row" data-tip="Keeps road and ground textures sharp at low angles (16x). Costs little.">
+        <div><div class="toggle-title">Anisotropic filtering</div><div class="toggle-sub">16x</div></div>
+        <button class="switch" id="anisotropy" role="switch"></button>
+      </div>
+      <div class="toggle-row" data-tip="Each texture gets the anisotropic filtering the game asks for, as on the console, instead of 16x everywhere. Slightly softer at a distance, less GPU work.">
+        <div><div class="toggle-title">Anisotropy as the game asks</div><div class="toggle-sub">Console-like</div></div>
+        <button class="switch" id="anisoFromGame" role="switch"></button>
+      </div>
+      <div class="toggle-row" data-tip="The box in the top left that shows shaders being compiled. Only hides it.">
+        <div><div class="toggle-title">Hide shader compile box</div><div class="toggle-sub">Top left of the screen</div></div>
+        <button class="switch" id="hideShaderOverlay" role="switch"></button>
+      </div>
+      <div class="toggle-row" data-tip="A panel at the top centre: frames a second, average and 99th-percentile frame time, and a graph of the last 400 frames. Read when the game starts.">
+        <div><div class="toggle-title">Fps counter and frame-time graph</div><div class="toggle-sub">Top centre of the screen</div></div>
+        <button class="switch" id="fpsPanel" role="switch"></button>
+      </div>
+    </section>
+  </main>
+
+  <!-- SETTINGS -->
+  <main class="page grid2" id="page-settings" hidden>
+    <div class="stack">
+      <section class="panel">
+        <div class="panel-head"><h2>Benchmark</h2></div>
+        <p class="hint" id="bench-hint">The game's own race AI drives your car through the London race (6 cars, 3 laps) while the frame rate is measured, then the game closes by itself. It races on the test route's own profile (out\user-route), so your save doesn't change, with the settings on these tabs: for the full speed set Max FPS 360 and VSync off. The AI drives a little differently each time: run it a few times before comparing.</p>
+        <div class="bench-controls">
+          <select id="bench-seconds" data-tip="How long to measure, starting 10 s after GO.">
+            <option value="45">Measure 45 s</option>
+            <option value="60" selected>Measure 60 s</option>
+            <option value="90">Measure 90 s</option>
+          </select>
+          <button class="ghost small" id="bench-run" data-tip="Starts the game for the benchmark race. Close the game first; don't touch the controller while it runs.">Run benchmark</button>
+          <button class="ghost small" data-open="bench" data-tip="Each result as a .json file with its pgr3.log, and runs.csv with all of them.">Open results</button>
+        </div>
+        <div class="status" id="bench-status"></div>
+        <div class="bench-table-wrap"><table class="bench-table" id="bench-table"></table></div>
+      </section>
+      <section class="panel">
+        <div class="panel-head"><h2>Folders</h2></div>
+        <div class="kv" id="folders"></div>
+        <div class="buttons-row">
+          <button class="ghost small" data-open="user" data-tip="Saves, settings and caches.">Open user folder</button>
+          <button class="ghost small" data-open="install" data-tip="The game build and this launcher.">Open install folder</button>
+          <button class="ghost small" data-open="log" data-tip="pgr3.log: the game's log (pgr3.prev.log: the run before). Send it with bug reports.">Open log folder</button>
+        </div>
+      </section>
+    </div>
+
+    <div class="stack">
+      <section class="panel">
+        <div class="panel-head"><h2>Shader cache</h2></div>
+        <p class="hint">Shaders are compiled the first time they're needed and kept here, so later starts and races don't stutter.</p>
+        <div class="stats" id="shader-stats"></div>
+        <div class="buttons-row">
+          <button class="ghost small danger" id="shaders-delete" data-tip="Deletes the compiled shaders and pipelines. The next start rebuilds them. Saves and settings stay.">Delete cache</button>
+          <button class="ghost small" data-open="user" data-tip="Opens the user folder, where the cache lives.">Open folder</button>
+        </div>
+      </section>
+      <section class="panel">
+        <div class="panel-head"><h2>Testing</h2></div>
+        <div class="toggle-row" data-tip="The game's clock, top left, to a tenth of a second: the same clock as pgr3.log, so a screenshot points into the log.">
+          <div><div class="toggle-title">Test timer</div><div class="toggle-sub">Top left of the screen</div></div>
+          <button class="switch" id="timer" role="switch"></button>
+        </div>
+        <div class="toggle-row" data-tip="ReGPU's debug server on 127.0.0.1 port 7342 (this PC only), which tools\pgr3ctl.ps1 attaches to.">
+          <div><div class="toggle-title">Debug server</div><div class="toggle-sub">For tools\pgr3ctl.ps1</div></div>
+          <button class="switch" id="debugServer" role="switch"></button>
+        </div>
+        <div class="toggle-row" data-tip="One line a second in pgr3.log: fps, frame times, draws, GPU time and how busy ReGPU's draw thread is. Near-free. Read when the game starts.">
+          <div><div class="toggle-title">Light performance log</div><div class="toggle-sub">fps and load in pgr3.log; near-free</div></div>
+          <button class="switch" id="perfLogLight" role="switch"></button>
+        </div>
+        <div class="toggle-row" data-tip="Detailed timing lines per part of the frame in pgr3.log. Times every draw: costs well over 10% fps.">
+          <div><div class="toggle-title">Performance log</div><div class="toggle-sub">Detailed timings, costs fps</div></div>
+          <button class="switch" id="perfLog" role="switch"></button>
+        </div>
+        <div class="toggle-row" data-tip="ReGPU's upload ring in video memory (through resizable BAR) instead of system memory. PGR3 runs faster with it in system memory (session 3: +9.7% at 720p); try it if your GPU is the limit.">
+          <div><div class="toggle-title">Upload ring in VRAM</div><div class="toggle-sub">Off by default for PGR3</div></div>
+          <button class="switch" id="vramUploadRing" role="switch"></button>
+        </div>
+        <div class="toggle-row" data-tip="Draws are split across worker threads. Slower on PGR3 so far (session 4: -10%).">
+          <div><div class="toggle-title">Draw workers</div><div class="toggle-sub">A/B test, slower for now</div></div>
+          <button class="switch" id="drawWorkers" role="switch"></button>
+        </div>
+        <div class="toggle-row" data-tip="Shaders compiled with DXC (DXIL) instead of FXC. Untested on PGR3; DXC needs its own first compile.">
+          <div><div class="toggle-title">DXC shader compiler</div><div class="toggle-sub">Untested on PGR3</div></div>
+          <button class="switch" id="dxcShaders" role="switch"></button>
+        </div>
+        <div class="toggle-row" data-tip="The frame ends on ReGPU's replay thread. Turning it off was 4.6% slower (session 3).">
+          <div><div class="toggle-title">Async present</div><div class="toggle-sub">On by default</div></div>
+          <button class="switch" id="asyncPresent" role="switch"></button>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <div class="modal" id="confirm" hidden>
+    <div class="dialog">
+      <h2 id="confirm-title"></h2>
+      <p id="confirm-text"></p>
+      <div class="buttons">
+        <button class="ghost" data-choice="no">Cancel</button>
+        <button class="primary" data-choice="yes" id="confirm-yes">OK</button>
+      </div>
+    </div>
+  </div>
+  <div class="tooltip" id="tooltip" hidden></div>
+  <div class="toast" id="toast" hidden></div>
+  <script src="host.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

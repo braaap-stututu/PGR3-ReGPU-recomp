@@ -665,8 +665,21 @@ void GpuStart()
         // Uncapped (max_fps 360, the top): each frame waits for a vblank boundary when it presents, so faster vblanks
         // waste less of it. AI benchmark race, 2 rounds each: 720 Hz 261.2 / 263.9 fps, 1000 Hz 277.9 / 277.8; frozen
         // grid 1000 -> 2000 Hz +2.9%, 3000 Hz +3.9%. Under a cap 2x stays (cap 60: p99 18.6 ms at 120 Hz, 21.6 at 240).
+        // Session 4 (grid at ~307 fps): 4000 Hz +1.3% over 2000 (boot A/B 2/2); the command processor, which runs the
+        // vblank interrupts, 25% -> 36% of a core.
+        // Since then the vblank comes as soon as the swap waits for it (ReGPU REGPU_VBLANK_ON_WAIT, patch
+        // regpu-vblank-on-wait): PGR3's swap waits for a flag its vblank handler clears (sub_823CFF78), twice a frame at
+        // interval 2, ~140 us each at 4000 Hz. Grid +9.2% over 4000 Hz ticks (live, 4/4), draw thread 90 -> 98% busy,
+        // picture identical, game clock 60.00 s in 60 s of a race. With it the tick rate no longer matters (grid, boot
+        // A/B 3 rounds: 4000 / 2000 / 720 Hz 316.6 / 318.8 / 319.0 fps), so the plain 2x cap (720 Hz) stays.
+        // PGR3_VBLANK_ON_TICK=1: off, with the 4000 Hz ticks as before.
         if (cap >= 360 && divider == 2)
-            hz = 2000;
+        {
+            if (getenv("PGR3_VBLANK_ON_TICK"))
+                hz = 4000;
+            else
+                DefaultEnv("REGPU_VBLANK_ON_WAIT", "1");
+        }
         const char* fixed = getenv("PGR3_VBLANK_HZ");
         if (!fixed)
             fixed = getenv("REGPU_VBLANK_HZ");
