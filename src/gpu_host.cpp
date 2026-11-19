@@ -459,8 +459,25 @@ void GpuStart()
     // settings.ini aniso_from_game=1 (launcher Graphics "Anisotropy as the game asks"); REGPU_ANISO_FROM_FETCH=1 directly.
     if (GetSettings().Extra("aniso_from_game") == "1")
         DefaultEnv("REGPU_ANISO_FROM_FETCH", "1");
-    if (GetSettings().Extra("vram_upload_ring") != "0")
+    // PGR3 (session 3): ReGPU's draw thread is the limit at every resolution on the RX 7900 XTX test PC (frozen grid,
+    // GPU 2.4-3.0 ms of a 4.2 ms frame), so the ring stays in system memory by default: 720p 1x 217.8 -> 238.9 fps
+    // (+9.7%, 4/4 live rounds), 1440p 4x -> +3.1% (GPU time 2.45 -> 2.97 ms, still far from the limit), picture the
+    // same. settings.ini vram_upload_ring=1 puts it in VRAM (for GPU-bound PCs).
+    if (GetSettings().Extra("vram_upload_ring") == "1")
         DefaultEnv("REGPU_GPU_UPLOAD_RING", "1");
+    // Sampled upload hashes (session 3, from PGR4-ReGPU, which ships it): a vertex/constant upload seen before is
+    // checked by samples instead of a full hash. Frozen grid 720p 1x 201.9 -> 217.8 fps (+7.9%, 4/4 live rounds), picture
+    // the same (1 of 153,600 sampled pixels by 3 levels; old vs old: 3 by 1). Not exact: a buffer changed only where the
+    // samples miss would show its old contents for a frame. PGR3_FULL_UPLOAD_HASH=1: off; live: switch REGPU_UPLOAD_SAMPLED 0|1.
+    if (!getenv("PGR3_FULL_UPLOAD_HASH"))
+        DefaultEnv("REGPU_UPLOAD_SAMPLED", "1");
+    // Float constants by count (session 3): each draw copies its shaders' float constants up to the highest one read in
+    // one straight byte-swapped run, instead of only the ones in the shader's mask (more bytes, fewer branches; never
+    // fewer constants, so the picture can't change). With the ring in system memory: frozen grid 245.5 -> 250.7 fps
+    // (+2.1%, 3/3 live rounds). A namespace-scope switch in ReGPU, so set through SetSwitch.
+    // PGR3_MASKED_CONSTANTS=1: masked, as before; live: switch REGPU_CONSTANTS_BY_COUNT 0|1.
+    if (!getenv("PGR3_MASKED_CONSTANTS") && !getenv("REGPU_CONSTANTS_BY_COUNT") && GetSettings().Extra("vram_upload_ring") != "1")
+        regpu::driver::SetSwitch("REGPU_CONSTANTS_BY_COUNT", true);
     // (The VRAM ring wins where the GPU is the limit, system memory where ReGPU's draw thread is: session 36, 1440p 1x
     // grid +5.5% with vram_upload_ring=0, 4x MSAA -1.6%, 4K far worse. The launcher's tooltip says so; the user's choice
     // (session 36) is that toggle, not an automatic pick. REGPU_UPLOAD_RING_AUTO=1, ReGPU patch 57, stays for tests.)
@@ -628,11 +645,12 @@ void GpuStart()
     if (GetSettings().Extra("fps_panel") == "1")
         DefaultEnv("REGPU_FPS_PANEL", "1");
 
-    // Q24: the main loop runs on guest vblanks (src/hooks/frame_time.cpp). At the frame cap's 60
-    // (the default) one vblank per frame, as before; at other caps (max_fps, or the display's
-    // refresh if lower and vsync is on) the vblank runs at twice the cap with mainthread30fps on
-    // (divider 2), so the render thread draws every main frame. PGR3_VBLANK_DIVIDER=1: one vblank
-    // per frame at any cap. PGR3_VBLANK_HZ=<n> sets the rate itself (divider 1, for measuring).
+    // PGR3's 30 fps cap (session 3, as PGR4-ReGPU does it): the game presents on every second vblank (30 fps on the
+    // console's 60 Hz) and keeps game time by its own clock (frame_time.cpp), not by frames. So the guest vblank runs
+    // at twice the frame cap (max_fps, or the display's refresh if lower and vsync is on) and ReGPU's limiter in
+    // VdSwap holds the cap. Measured: vblank 240 Hz -> 119.6 fps, 1000 Hz -> 238 fps, GO still 5.1 game seconds
+    // after the race's first frame (game speed unchanged). PGR3_VBLANK_DIVIDER=1: one vblank per frame (the old
+    // 30 fps at a 60 cap). PGR3_VBLANK_HZ=<n> sets the rate itself (for measuring).
     {
         const Settings& s = GetSettings();
         uint32_t cap = s.maxFps;
@@ -642,14 +660,19 @@ void GpuStart()
             cap = std::min<uint32_t>(cap, mode.dmDisplayFrequency);
         cap = std::clamp<uint32_t>(cap, 30, 360);
         const char* div = getenv("PGR3_VBLANK_DIVIDER");
-        uint32_t divider = cap == 60 || (div && atoi(div) == 1) ? 1 : 2;
+        uint32_t divider = div && atoi(div) == 1 ? 1 : 2;
         uint32_t hz = cap * divider;
+        // Uncapped (max_fps 360, the top): each frame waits for a vblank boundary when it presents, so faster vblanks
+        // waste less of it. AI benchmark race, 2 rounds each: 720 Hz 261.2 / 263.9 fps, 1000 Hz 277.9 / 277.8; frozen
+        // grid 1000 -> 2000 Hz +2.9%, 3000 Hz +3.9%. Under a cap 2x stays (cap 60: p99 18.6 ms at 120 Hz, 21.6 at 240).
+        if (cap >= 360 && divider == 2)
+            hz = 2000;
         const char* fixed = getenv("PGR3_VBLANK_HZ");
         if (!fixed)
             fixed = getenv("REGPU_VBLANK_HZ");
         if (fixed)
         {
-            hz = uint32_t(std::clamp(atoi(fixed), 30, 1000));
+            hz = uint32_t(std::clamp(atoi(fixed), 30, 4000));
             divider = 1;
         }
         _putenv_s("REGPU_VBLANK_HZ", std::to_string(hz).c_str());

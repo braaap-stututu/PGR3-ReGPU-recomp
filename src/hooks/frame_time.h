@@ -12,3 +12,5 @@ void FrameTimeSetPacing(uint32_t fps, uint32_t vblankHz, uint32_t divider);
 void FrameTimeFreeze(bool on);
 uint64_t FrameTimeMainFrames();
 uint64_t FrameTimeLastLongFrame();
+// The game clock's game time in seconds (clock 0x82545774 +16; src/hooks/frame_time.cpp).
+float FrameTimeGameClock();

@@ -100,6 +100,8 @@ $regpuPatches = @(
     'regpu-front-buffer-size'        # PGR3 port: a resolved front buffer smaller than 1280x720 (PGR3's 1024x600 races) is presented, centred (REGPU_FRONT_BUFFER_EXACT=1 old)
     'regpu-memexport-log'            # PGR3 port: one log line per vertex shader with memory export drawn (its writes are dropped)
     'regpu-cf-jump-past-end'         # PGR3 port: control flow after the first exec end is parsed for jump/loop targets too, not only calls (REGPU_NO_JUMP_PAST_END=1 old)
+    'regpu-drain-switches'           # PGR3 port: live test switches REGPU_NO_WAIT_DRAIN / REGPU_NO_INTERRUPT_DRAIN (command processor runs on without draining the draw thread; off by default)
+    'regpu-vblank-hz-4000'           # PGR3 port: REGPU_VBLANK_HZ accepted up to 4000 (was 1000): PGR3 uncapped runs its vblank at 2000 Hz
 )
 
 function Invoke-Git { & git @args; if ($LASTEXITCODE -ne 0) { throw "git $args failed ($LASTEXITCODE)" } }

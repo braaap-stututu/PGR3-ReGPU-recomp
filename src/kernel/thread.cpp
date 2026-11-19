@@ -292,7 +292,9 @@ void LogGuestThreads()
         GuestThread& t = *object->thread;
         if (t.ctx)
         {
-            Log("  thread %u %-16s %s", t.id, t.name.c_str(), HostStack(t.hostHandle, 10).c_str());
+            // PGR3_WATCHDOG_DEPTH=N: N frames per stack (default 10), e.g. 40 to see a thread's main loop.
+            static const int depth = getenv("PGR3_WATCHDOG_DEPTH") ? std::max(1, atoi(getenv("PGR3_WATCHDOG_DEPTH"))) : 10;
+            Log("  thread %u %-16s %s", t.id, t.name.c_str(), HostStack(t.hostHandle, depth).c_str());
             if (!t.waitingOn.empty())
                 Log("      waits on %s", t.waitingOn.c_str());
         }

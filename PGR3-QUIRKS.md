@@ -69,8 +69,9 @@ PGR4/FM3 runtime, and 22 `Vd*` calls are handled inside ReGPU. The rest:
 
 | # | Quirk | Source | Status |
 |---|---|---|---|
-| G1 | 30 fps render with a fixed-rate physics thread; above 30/60 fps one-frame inputs get lost (gear presses), menu repeat counted in frames, walking quantised | PGR4 `gear_latch`, `garage_walk` | expected |
+| G1 | 30 fps render with a fixed-rate physics thread; above 30/60 fps one-frame inputs get lost (gear presses), menu repeat counted in frames, walking quantised | PGR4 `gear_latch`, `garage_walk` | session 3: the 30 fps lock is removed (vblank 2x the cap); game time follows its clock (race start unchanged at every rate). Frame-rate-tied input/menu bugs **not checked yet** at high fps |
 | G2 | Game bugs exposed by recompilation: shadow frustum byte cleared too early; grid lookup loops forever at huge positions | PGR4 `car_shadow`, `grid_bounds` | maybe |
 | G3 | Lua **5.0.2** UI (not 5.1). luaD_throw 8233D9D0; lua_dofile 8234B940 (luaL_loadfile 8234B778, errors reported only via `_ALERT`); scripts are looked up by name in the BZUI pack table (8231D8E0) | session 2 | logged by src/hooks/lua.cpp |
 | G4 | Intro skip: fake the Bink "movie finished" result | PGR4 `skip_intro.cpp` | expected |
 | G5 | PAL movies (`*_25.bik`) on the Europe disc: the game may choose 50 Hz content by video mode | disc | unknown |
+| G6 | Game clock 0x82545774 (ticked by sub_82158BC8 in the world update sub_82299690); presents every second vblank; its own one-frame throttle in sub_821507A0 (option byte 0x825445D8). The countdown (GO = Lua RaceStarted) runs on another clock | session 3 | frame_time.cpp freeze, frame_wait.cpp switch |

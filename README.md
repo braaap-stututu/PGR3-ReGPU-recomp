@@ -1,0 +1,44 @@
+# PGR3-ReGPU recomp
+
+Work-in-progress static recompilation of **Project Gotham Racing 3** (Xbox 360, Bizarre Creations, 2005) for Windows
+x64, built on [ReXenon](https://github.com/zer0ducksgiven/ReXenon) (the recompiler) and
+[ReGPU](https://github.com/zer0ducksgiven/ReGPU) (Xbox 360 GPU on Direct3D 12). It follows the
+[PGR4-ReGPU](https://github.com/zer0ducksgiven/PGR4-ReGPU) port and our Forza Motorsport 3 ReGPU recomp.
+
+**No game data is included.** You need your own copy of the game (Europe disc, title 4D5307D1).
+
+## Status
+
+- Recompiled: 16,630 functions, no unresolved branches.
+- Boots through the intro movies, menus, car purchase and garage into a race, with sound. The London race matches the
+  console.
+- The console's 30 fps lock is removed: an AI-driven benchmark race runs at ~296 fps uncapped at 720p on an
+  RX 7900 XTX (29.7 fps locked).
+- Still to do: stretching the 1024x600 race picture to the window, the rest of the race against the console, a few
+  system calls, intro skip, DLC, saves, a launcher.
+
+## Layout
+
+| Path | What |
+|---|---|
+| `src/` | Runtime: kernel and XAM, memory, threads, files, audio, input, settings, and the game hooks (`src/hooks/`) |
+| `config/` | ReXenon configuration: function boundaries and jump tables for the disc `default.xex` |
+| `patches/` | Our patch stacks on ReGPU and ReXenon (`patches/README.md` lists each one and why) |
+| `tools/` | Setup, recompile, XEX/ISO tools, debug-server client, test grid, benchmark and A/B scripts |
+| `thirdparty/` | ReGPU, ReXenon, meshoptimizer (submodules; patched by `tools/setup.ps1`) |
+| `NOTES.md` | Session notes: current state, findings, every fix and measurement |
+| `PLAN.md`, `PGR3-QUIRKS.md` | The plan and the game's known quirks |
+
+## Building (Windows)
+
+VS 2022 Build Tools, LLVM clang-cl, CMake, Ninja, Python 3.
+
+```powershell
+py -3 tools\xiso.py "<PGR3 disc>.iso" extract game\disc   # the game files (never committed)
+copy game\disc\default.xex game\default.xex
+.\tools\setup.ps1             # submodules, patch stacks, host tools
+.\tools\recomp.ps1 -Base      # game\default.xex -> out\ppc (checks the Europe disc's SHA-256)
+cmd /c "tools\vcenv.cmd cmake -S . -B build\rel -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl"
+cmd /c "tools\vcenv.cmd ninja -C build\rel"
+play.cmd                      # saves and settings in out\user, log in out\run\pgr3.log
+```

@@ -541,8 +541,7 @@ bool ReadPad(uint32_t user, PadState& s, bool gameRead = true)
     {
         connected = true;
         AddKeyboard(s, isWheel);
-        if (GridTestPressA()) // grid_test=1: A presses from boot to the race start (src/hooks/grid_test.cpp)
-            s.buttons |= XINPUT_GAMEPAD_A;
+        s.buttons |= GridTestButtons(); // grid_test=1: A/START presses from boot to the race build (src/hooks/grid_test.cpp)
         static LiveSwitch autoStart("PGR3_AUTOSTART");
         static const auto start = Clock::now();
         // PGR3_INPUT_SCRIPT="7:START,10:A,14:RIGHT,...": press each button for

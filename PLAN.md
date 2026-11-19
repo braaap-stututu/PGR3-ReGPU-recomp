@@ -5,6 +5,13 @@ for Windows x64 on ReXenon/XenonRecomp + ReGPU (D3D12), following the PGR4-ReGPU
 (<https://github.com/zer0ducksgiven/PGR4-ReGPU>) and our FM3-ReGPU recomp
 (`G:\claude code projects\FM3-ReGPU recomp`).
 
+## Status (end of session 3, 2026-11-19)
+
+Phases 0-4 done: recompiled (16,630 functions, 0 unresolved), boots to a race that matches the console on the London
+grid. Phase 5 (rendering parity) partly: race frame scaling and the rest of the race still to check. Phase 6 started:
+30 fps lock removed, test grid + AI benchmark (FM3 style), first optimisation pass 29.7 -> 296 fps uncapped at 720p;
+frame-rate-tied bugs (G1) not checked yet. Details and next steps: NOTES.md "Start here".
+
 ## Strategy in one paragraph
 
 Use **PGR4-ReGPU as the template, not FM3**. PGR4 is the same studio and engine line, so its findings
