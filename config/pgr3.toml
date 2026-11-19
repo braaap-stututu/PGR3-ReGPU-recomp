@@ -1,0 +1,140 @@
+# ReXenon config for Project Gotham Racing 3 (Europe disc), title 4D5307D1, default.xex version 0xB
+# (built 2006-10-05, updates folded in; TU5 not used), SHA-256 26fb114109f0fa997497c6836385b8af391db253d75c08d78d12f4899475a78a.
+# Paths are relative to this file. Quirk numbers refer to PGR3-QUIRKS.md.
+[main]
+file_path = "../game/default.xex"
+out_directory_path = "../out/ppc"
+switch_table_file_path = "pgr3_switch_tables.toml"
+
+# Registers kept in host locals instead of the guest context, as in FM3/PGR4.
+skip_lr = false
+skip_msr = false
+ctr_as_local = true
+xer_as_local = true
+reserved_as_local = true
+cr_as_local = true
+non_argument_as_local = false
+non_volatile_as_local = false
+
+# Register save/restore helpers: tools/pgr3_config.py --write (one match each in this image).
+restgprlr_14_address = 0x82478670
+savegprlr_14_address = 0x82478620
+restfpr_14_address = 0x82478F9C
+savefpr_14_address = 0x82478F50
+restvmx_14_address = 0x82479A98
+savevmx_14_address = 0x82479800
+restvmx_64_address = 0x82479B2C
+savevmx_64_address = 0x82479894
+
+# Q7: CRT setjmp/longjmp, mapped to host setjmp/longjmp with the guest context saved and restored.
+# Checked in build/tools/ppcdis.exe: setjmp (no .pdata) 8247F3D0..8247F49C first jumps through an override
+# pointer at 8294BBC8 if set, then stores f14-f31 at +0, r13-r31 at +152, CR at +304, LR at +308, r1 at +144,
+# clears +312 and returns 0. longjmp (.pdata 8247F2B0+114) reads +312, unwinds via 8248BB90 with LR/r1,
+# then restores the same layout: the FM3/FM4 CRT layout. The other ld-run candidate (82491414, base r4)
+# is an exception-unwind CONTEXT restore, not longjmp.
+setjmp_address = 0x8247F3D0
+longjmp_address = 0x8247F2B0
+
+functions = [
+    # setjmp has no .pdata (as in FM3).
+    { address = 0x8247F3D0, size = 0xCC },
+
+    # .pdata 82465300+514 ends before its exception data (8246587C) and funclet (.pdata 82465884, addi r31,r12,..);
+    # its own epilogue sits after the funclet at 824658E4..82465900, reached by b from 82465810. One function to
+    # 82465900 (the exception words are skipped by invalid_instructions; the funclet is only reached by unwinding).
+    { address = 0x82465300, size = 0x600 },
+
+    # Q5: leaf functions without .pdata in gaps where the first recompile split a jump-table leaf into pieces
+    # (// ERROR branches). Sized by tools/pgr3_leaves.py: starts = gap start + every bl/pointer target, each runs
+    # to the next start. BEGIN pgr3_leaves.py
+    # gap 8217BBC8..8217BEB0 (between .pdata 8217BB58 and 8217BEB0)
+    { address = 0x8217BBC8, size = 0x20 },
+    { address = 0x8217BBE8, size = 0x84 },
+    { address = 0x8217BC70, size = 0x84 },
+    { address = 0x8217BCF8, size = 0x68 },
+    { address = 0x8217BD60, size = 0x64 },
+    { address = 0x8217BDC8, size = 0x60 },
+    { address = 0x8217BE28, size = 0x88 },
+    # gap 8218E9C8..8218EB98 (between .pdata 8218E888 and 8218EB98)
+    { address = 0x8218E9C8, size = 0x1D0 },
+    # gap 82194280..821945D8 (between .pdata 82194148 and 821945D8)
+    { address = 0x82194280, size = 0x88 },
+    { address = 0x82194308, size = 0x1F4 },
+    { address = 0x82194500, size = 0xD8 },
+    # gap 8219D6B8..8219D908 (between .pdata 8219D618 and 8219D908)
+    { address = 0x8219D6B8, size = 0x24 },
+    { address = 0x8219D6E0, size = 0x14 },
+    { address = 0x8219D6F8, size = 0x24 },
+    { address = 0x8219D720, size = 0x14 },
+    { address = 0x8219D738, size = 0x1D0 },
+    # gap 821E4DC8..821E57E0 (between .pdata 821E4C48 and 821E57E0)
+    { address = 0x821E4DC8, size = 0x114 },
+    { address = 0x821E4EE0, size = 0x30 },
+    { address = 0x821E4F10, size = 0x90 },
+    { address = 0x821E4FA0, size = 0xAC },
+    { address = 0x821E5050, size = 0x28C },
+    { address = 0x821E52E0, size = 0x160 },
+    { address = 0x821E5440, size = 0xC0 },
+    { address = 0x821E5500, size = 0x1D4 },
+    { address = 0x821E56D8, size = 0x108 },
+    # gap 821EA500..821EA5D0 (between .pdata 821EA2B0 and 821EA5D0)
+    { address = 0x821EA500, size = 0xCC },
+    # gap 821EC958..821ED088 (between .pdata 821EC8E0 and 821ED088)
+    { address = 0x821EC958, size = 0x2F0 },
+    { address = 0x821ECC48, size = 0x94 },
+    { address = 0x821ECCE0, size = 0x2F0 },
+    { address = 0x821ECFD0, size = 0xB4 },
+    # gap 822022D8..82202398 (between .pdata 822021B8 and 82202398)
+    { address = 0x822022D8, size = 0xC0 },
+    # gap 82255328..82255428 (between .pdata 822552A8 and 82255428)
+    { address = 0x82255328, size = 0xFC },
+    # gap 82264BE0..82264E78 (between .pdata 82264840 and 82264E78)
+    { address = 0x82264BE0, size = 0xA4 },
+    { address = 0x82264C88, size = 0x30 },
+    { address = 0x82264CB8, size = 0x14 },
+    { address = 0x82264CD0, size = 0x100 },
+    { address = 0x82264DD0, size = 0x98 },
+    { address = 0x82264E68, size = 0xC },  # setter (lis/stw/blr), reached only by a tail-call b from sub_8227D960 (hand-added)
+    # gap 82281B98..82281C98 (between .pdata 822819F0 and 82281C98)
+    { address = 0x82281B98, size = 0xFC },
+    # gap 8233ED98..8233EEF8 (between .pdata 8233ECB8 and 8233EEF8)
+    { address = 0x8233ED98, size = 0x2C },
+    { address = 0x8233EDC8, size = 0x6C },
+    { address = 0x8233EE38, size = 0xBC },
+    # gap 82341E40..82341FA8 (between .pdata 82341DB8 and 82341FA8)
+    { address = 0x82341E40, size = 0x38 },
+    { address = 0x82341E78, size = 0x94 },
+    { address = 0x82341F10, size = 0x94 },
+    # gap 8237C608..8237C948 (between .pdata 8237C3F0 and 8237C948)
+    { address = 0x8237C608, size = 0x164 },
+    { address = 0x8237C770, size = 0x78 },
+    { address = 0x8237C7E8, size = 0xAC },
+    { address = 0x8237C898, size = 0xB0 },
+    # gap 8239ADE0..8239AFA0 (between .pdata 8239AD48 and 8239AFA0)
+    { address = 0x8239ADE0, size = 0x1AC },
+    { address = 0x8239AF90, size = 0x10 },
+    # gap 8239C680..8239C830 (between .pdata 8239C608 and 8239C830)
+    { address = 0x8239C680, size = 0x1B0 },
+    # gap 8239CE38..8239D0E0 (between .pdata 8239CDC8 and 8239D0E0)
+    { address = 0x8239CE38, size = 0xE8 },
+    { address = 0x8239CF20, size = 0x1B0 },
+    { address = 0x8239D0D0, size = 0x10 },
+    # gap 8246BF98..8246C120 (between .pdata 8246BF60 and 8246C120)
+    { address = 0x8246BF98, size = 0x18 },
+    { address = 0x8246BFB0, size = 0x38 },
+    { address = 0x8246BFE8, size = 0x38 },
+    { address = 0x8246C020, size = 0x1C },
+    { address = 0x8246C040, size = 0x10 },
+    { address = 0x8246C050, size = 0xCC },
+    # END pgr3_leaves.py
+]
+
+invalid_instructions = [
+    { data = 0x00000000, size = 4 }, # padding
+    # Exception data (handler + scope table) before .pdata functions with the exception flag.
+    # BEGIN pgr3_config.py exception data
+    { data = 0x82481AB8, size = 8 }, # handler of 227 functions
+    { data = 0x824F00B8, size = 8 }, # handler of 49 functions
+    { data = 0x82491560, size = 8 }, # handler of 1 functions
+    # END pgr3_config.py exception data
+]

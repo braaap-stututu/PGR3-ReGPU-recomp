@@ -1,0 +1,40 @@
+# Jump tables kept by hand: XenonAnalyse (ReXenon) misses them, and tools/recomp.ps1 -Prepare appends this file
+# to its output. Each entry was read from the image and checked in ppcdis.
+
+# sub_821B12D0: cmplwi cr6,r10,28 at 821B1344 + bgt 821B2820 (29 cases); lis/addi r12 = table 821B1454 at 821B143C,
+# lwzx/mtctr/bctr at 821B1450. The register lies between the bound and the dispatch, so only a back-trace finds it.
+[[switch]]
+base = 0x821B143C
+r = 10
+default = 0x821B2820
+labels = [
+    0x821B14C8,
+    0x821B1638,
+    0x821B16D8,
+    0x821B175C,
+    0x821B17CC,
+    0x821B184C,
+    0x821B18BC,
+    0x821B1928,
+    0x821B1998,
+    0x821B1A18,
+    0x821B1A80,
+    0x821B1AA8,
+    0x821B1AB4,
+    0x821B1BB8,
+    0x821B1C28,
+    0x821B1C84,
+    0x821B1D0C,
+    0x821B1E30,
+    0x821B2168,
+    0x821B2378,
+    0x821B23E0,
+    0x821B256C,
+    0x821B25F8,
+    0x821B26AC,
+    0x821B26D0,
+    0x821B27B8,
+    0x821B2860,
+    0x821B2868,
+    0x821B29D0,
+]
