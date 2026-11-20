@@ -19,7 +19,9 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <mutex>
 #include <thread>
+#include <vector>
 
 #include "hooks/frame_time.h"
 #include "hooks/grid_test.h"
@@ -55,6 +57,45 @@ double FreezeAt()
     return at;
 }
 
+// Every frame's time inside the measuring window (session 5: 1% lows and stutters; the perf lite lines are per second).
+// Taken at ReGPU's frame end (Host::onSwap, the draw thread): the same frames the fps panel draws.
+std::mutex g_benchMutex;
+std::vector<float> g_benchFrames;
+std::atomic<bool> g_benchMeasuring{ false };
+LARGE_INTEGER g_benchLast{};
+
+void BenchmarkFrameStats()
+{
+    std::vector<float> t;
+    {
+        std::lock_guard lock(g_benchMutex);
+        t.swap(g_benchFrames);
+    }
+    if (t.size() < 100)
+        return;
+    double sum = 0;
+    for (float v : t)
+        sum += v;
+    std::vector<float> sorted = t;
+    std::sort(sorted.begin(), sorted.end());
+    const size_t n = sorted.size();
+    auto pct = [&](double p) { return sorted[std::min(n - 1, size_t(p * double(n)))]; };
+    auto low = [&](double share) { // average fps of the slowest share of frames
+        const size_t k = std::max<size_t>(1, size_t(share * double(n)));
+        double s = 0;
+        for (size_t i = n - k; i < n; i++)
+            s += sorted[i];
+        return 1000.0 * double(k) / s;
+    };
+    const float median = pct(0.5);
+    int over2x = 0, over8 = 0, over16 = 0;
+    for (float v : t)
+        over2x += v > 2 * median, over8 += v > 8.0f, over16 += v > 16.7f;
+    Log("benchmark: frames %zu, avg %.1f fps (%.2f ms), 1%% low %.1f fps, 0.1%% low %.1f fps, p99 %.2f ms, p99.9 %.2f ms, worst %.2f ms, "
+        "stutters: over 2x median %d, over 8 ms %d, over 16.7 ms %d",
+        n, 1000.0 * double(n) / sum, sum / double(n), low(0.01), low(0.001), pct(0.99), pct(0.999), sorted[n - 1], over2x, over8, over16);
+}
+
 void StartBenchmarkClock()
 {
     std::thread([] {
@@ -63,13 +104,32 @@ void StartBenchmarkClock()
         Sleep(DWORD(settle) * 1000);
         // (with the game clock, frame_time.cpp: it must advance as fast as the wall clock at any frame rate)
         Log("benchmark: measuring %d s (from %d s after GO; game time %.3f s)", BenchmarkSeconds(), settle, FrameTimeGameClock());
+        g_benchLast.QuadPart = 0;
+        g_benchMeasuring = true;
         Sleep(DWORD(BenchmarkSeconds()) * 1000);
+        g_benchMeasuring = false;
         Log("benchmark: done (game time %.3f s)", FrameTimeGameClock());
+        BenchmarkFrameStats();
         Sleep(1500); // (one more perf lite line, and the log written)
         EnumWindows(CloseOurWindow, 0);
     }).detach();
 }
 } // namespace
+
+void GridTestSwap()
+{
+    if (!g_benchMeasuring.load(std::memory_order_relaxed))
+        return;
+    static LARGE_INTEGER freq = [] { LARGE_INTEGER f; QueryPerformanceFrequency(&f); return f; }();
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    if (g_benchLast.QuadPart)
+    {
+        std::lock_guard lock(g_benchMutex);
+        g_benchFrames.push_back(float(double(now.QuadPart - g_benchLast.QuadPart) * 1000.0 / double(freq.QuadPart)));
+    }
+    g_benchLast = now;
+}
 
 uint16_t GridTestButtons()
 {

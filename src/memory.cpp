@@ -317,9 +317,15 @@ LONG CALLBACK OnWatchedWrite(EXCEPTION_POINTERS* info)
         Disarm(page & ~15u, 16);
     else
     {
-        // Not ours (or disarmed meanwhile): retry only if the page is writable now.
+        // Not ours (or disarmed meanwhile): retry only if the page is writable now. Asked under the lock (session 5): Disarm
+        // clears a page's bit and only then makes it writable, both under the exclusive lock; a write faulting between
+        // the two found the page not armed and still read-only and was passed on as a crash (PGR3 race, guest thread 21
+        // in sub_821B0AA8, once index buffers were watched too and pages were armed and disarmed far more often).
+        AcquireSRWLockShared(&g_watchLock);
         MEMORY_BASIC_INFORMATION mbi{};
-        if (!VirtualQuery(at, &mbi, sizeof(mbi)) || !(mbi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)))
+        const bool writable = VirtualQuery(at, &mbi, sizeof(mbi)) && (mbi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE));
+        ReleaseSRWLockShared(&g_watchLock);
+        if (!writable)
             return EXCEPTION_CONTINUE_SEARCH;
     }
     return EXCEPTION_CONTINUE_EXECUTION;
@@ -368,11 +374,18 @@ bool WriteWatchClean(uint32_t offset, uint32_t bytes, uint64_t since)
     if (!bytes || offset < kFirstTracked || uint64_t(offset) + bytes > kPhysicalSize)
         return false;
     const uint32_t first = offset / kPage, end = (offset + bytes + kPage - 1) / kPage;
-    AcquireSRWLockShared(&g_watchLock);
+    // (No lock, session 5: the shared lock was ~2% of ReGPU's draw thread once index buffers were watched too, ~1,500
+    // asks a frame. A writer to an armed page stays in OnWatchedWrite until Disarm has cleared the bit and stamped the
+    // page, so an answer read before that is still true when read; the bits are atomic and the stamps aligned 64-bit
+    // loads. PGR3_WATCH_CLEAN_LOCKED=1 (start-time): under the lock, as before.)
+    static const bool locked = getenv("PGR3_WATCH_CLEAN_LOCKED") != nullptr;
+    if (locked)
+        AcquireSRWLockShared(&g_watchLock);
     bool clean = true;
     for (uint32_t p = first; p < end && clean; p++)
-        clean = Armed(p) && g_lastWrite[p] < since;
-    ReleaseSRWLockShared(&g_watchLock);
+        clean = Armed(p) && __atomic_load_n(&g_lastWrite[p], __ATOMIC_ACQUIRE) < since;
+    if (locked)
+        ReleaseSRWLockShared(&g_watchLock);
     return clean;
 }
 

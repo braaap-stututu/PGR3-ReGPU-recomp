@@ -582,3 +582,60 @@ now gets auto. Launcher: the toggle reads "Upload ring always in VRAM / Off: cho
 tools/pgr3ctl.ps1 Start-Pgr3Dev sets `REGPU_UPLOAD_RING_AUTO=0` (system memory, as all earlier measurements; -Env to
 override). Verified: unpinned 1440p 4x grid boot chose VRAM at 35 s (3.20 vs 3.67 ms a frame); pinned boots log
 "in system memory". Constants by count stays on (it follows vram_upload_ring != 1, as tested).
+
+**Session 5, 1% lows / p99 / stutters (user's request).**
+- **Benchmark per-frame stats:** src/hooks/grid_test.cpp records every frame time in the window (ReGPU Host::onSwap ->
+  `GridTestSwap`, set in src/gpu_host.cpp) and logs "benchmark: frames N, avg, 1% low, 0.1% low (average fps of the
+  slowest 1% / 0.1%), p99, p99.9, worst, stutters over 2x median / 8 ms / 16.7 ms"; tools/bench_summary.py adds them
+  to result.json and prints a "per frame:" line (runs.csv unchanged).
+- **The auto ring mode (made default an hour earlier) stuttered:** its first trial made the other place's rings at
+  the grown 256 MB, three synchronous creations: 62/110/128 ms frames (60 s race, 1440p 4x, cap 360: 1% low 153.7,
+  0.1% low 44.3, worst 128 ms, 4 frames over 16.7 ms). New ReGPU patch **`regpu-ring-ahead`** (97th): rings made on a
+  background thread ahead of need (usage over 3/4; auto trials wait until the other-place rings are ready).
+  -> 1% low 211.8, 0.1% low 170.8, worst 8.2 ms, 0 over 16.7 ms (auto). Half usage as the trigger was tried first:
+  the race-load frame (132 MB of 256) asked for six 512 MB rings and the race start got 375/178 ms frames.
+- **Race start (before GO):** every race overflowed the 128 MB ring while loading ("ring full": draws dropped) and grew
+  it in the frames before GO (71/86/27/22/140 ms, the 140 ms one first-touch page faults). src/gpu_host.cpp now sets
+  `config.uploadRingMB = 256` (the size it always ended at; same steady-state memory). Race start now 72/63/18 ms.
+  What is left there: the first race frame decodes ~486 textures (25 ms) and the next creates ~31 render targets and
+  resolve images at the new native size (~50 ms off-CPU in the driver): not fixed.
+- In-race long frames left (~6 a minute over 2x the median, 5-8 ms): texture streaming, 50-154 new small textures in a
+  frame decoded serially on the draw thread (large ones already use helper threads). A deferred/parallel decode would
+  need the upload path restructured: not done.
+- Regression check, cap 1000, system-memory ring: 320.0 fps (was 317.3 / 316.0).
+
+**Session 5, further stutter work (user: "Can you improve it further?").**
+- New ReGPU patch **`regpu-texture-copy-threads`** (98th): DXT texture levels are copied/untiled into the upload ring
+  by 3 helper threads; the copy command is recorded at once and `SubmitLists` waits for the helpers. Pictures: four
+  frozen-grid boots (sync, async, sync, async) match by mode except for the opponents' cars, which the race picks
+  differently with the boot timing (pure-Python PNG diff in the scratchpad: pngdiff.py). Race A/B 2+2, 60 s, 1440p 4x
+  CMAA 2 cap 360 auto ring: 1% low 193.9 -> 205.0, 0.1% low 157.4 -> 173.1, over 2x median 14 -> 4.5, p99.9 5.79 ->
+  5.36 ms; first race frame 70 -> 53 ms.
+- New ReGPU patch **`regpu-frame-room`** (99th) + src/gpu_host.cpp `REGPU_FRAME_ROOM_HEIGHT=600`: the 62 ms frame
+  before GO was regpu-frame-size dropping and remaking every EDRAM surface at the first 600-row frame. Now 19 ms.
+  Race start now: first race frame ~55 ms (486 textures, 4,500 first draws), then 19 ms; the loading-screen frame at
+  ~11 s ~53 ms (195 textures).
+- In-race: one frame over 2x the median left in a 60 s run (156 new textures, mostly resource creation). The 1% low
+  (~195-210 fps, ~5 ms frames) is now heavy scenes with the draw thread the limit, not stutters. Not done: the RGBA
+  (565/8888) upload path still decodes on the draw thread (its level 0 is decoded early for dumps/UMA).
+
+**Session 5, draw-thread work for the 1% lows (user: "continue ... 1% lows and p99").** The slowest race seconds have
+4,400-4,800 draws a frame, the draw thread at 100% and the GPU at ~2.4 ms: the 1% low is the draw thread's per-draw
+cost. Race profile (summed over the run): index buffer work ~11% (lookups, per-frame map, full hash), memcpy ~8.6%
+(VertexCache copies of changed vertex data, UploadGuest, CP register copies: real work), write-watch lock ~3.9%.
+- My session-5 note that write-watching is "not possible" was wrong: the port already has a page-protection watch
+  (src/memory.cpp WriteWatchArm/Clean, a vectored exception handler) that the vertex arena uses. New ReGPU patch
+  **`regpu-index-watch`** (100th) uses it for index buffers (no full hash while clean; back-off after 4 same-content
+  re-arms; `REGPU_INDEX_VERIFY=1` diagnostic: 25 M + 21 M clean answers verified in two races, 0 misses).
+- src/memory.cpp: **`WriteWatchClean` lock-free** (atomic bits + aligned 64-bit stamps; `PGR3_WATCH_CLEAN_LOCKED=1`
+  start-time = old), and a **fault-handler race fixed**: Disarm clears a page's bit before making it writable, and a
+  write faulting in between (or between the views' VirtualProtect calls) was passed on as a crash. It happened once
+  (guest thread 21, sub_821B0AA8, in an A/B run) once index buffers were watched too; the not-armed path now checks
+  the page under the shared lock (waits for a disarm in progress). 8 races since: no crash.
+- Result, interleaved 2+2 on the final code (1440p 4x CMAA 2, cap 1000, VRAM ring): 334.2 -> 352.9 fps, 1% low
+  182.3 -> 201.1, 0.1% low 151.2 -> 164.4, p99 5.03 -> 4.56 ms.
+- Draw-thread pieces (`PGR3_DRAW_THREAD_PIECES=1`) re-tested with the watch: still -8% (319.8 vs 347.4), lows worse.
+- The machine's absolute numbers drifted a few % during this hour (the same configuration: 340 then 334): compare
+  only interleaved runs.
+- Next candidates: UploadGuest (sampled ContentHash + copies, ~5%; careful: mid-frame rewrites, FH1 skid marks),
+  FrameMap::Put/Find for index views (~2-3%), the VertexCache copies of dynamic vertex data (~3%).

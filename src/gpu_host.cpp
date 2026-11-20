@@ -33,6 +33,7 @@
 #include "kernel/runtime.h"
 #include "kernel/thread.h"
 #include "live_switch.h"
+#include "hooks/grid_test.h"
 #include "log.h"
 #include "memory.h"
 #include "settings.h"
@@ -254,6 +255,14 @@ void GpuStart()
     ApplyPerfPreset(config);
     config.userDir = UserDir(); // shader and pipeline caches
     config.windowTitle = L"Project Gotham Racing 3";
+    // Upload ring 256 MB per frame slot from the start (session 5): every race filled the 128 MB default while it loaded
+    // ("ring full", draws dropped) and grew it to 256 MB in the frames before GO (three 20-40 ms creations, then
+    // first-touch page faults: 71/86/27/22/140 ms frames). Steady-state memory is the same (the ring ends at 256 MB
+    // anyway). REGPU_RING_MB overrides.
+    config.uploadRingMB = 256;
+    // PGR3's races draw 600-row frames (regpu-frame-size): EDRAM surfaces tall enough for them from the boot (session 5:
+    // otherwise the first race frame remade every surface, a ~62 ms frame before GO). 1440p: 2458 rows instead of 2048.
+    DefaultEnv("REGPU_FRAME_ROOM_HEIGHT", "600");
 
     regpu::Host& host = regpu::GetHost();
     host.base = g_base;
@@ -283,6 +292,7 @@ void GpuStart()
     host.pipelineSeed = [] { return kPipelineSeed; };
     // The first-boot shader compile screen (session 39): a rev counter climbing to the limiter (src/boot_screen.cpp).
     host.bootScreen = BootScreen;
+    host.onSwap = [](uint64_t) { GridTestSwap(); }; // (the benchmark's frame times; a flag check otherwise)
     BootScreenTest();
 
     // The bar across the 3D view (rows ~360-511, ending at the EDRAM tile seam: FM3 draws its 2x MSAA 720p

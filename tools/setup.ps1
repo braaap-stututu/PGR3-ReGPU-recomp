@@ -109,6 +109,10 @@ $regpuPatches = @(
     'regpu-cp-handoff'               # PGR3 port: CP/draw-thread waits spin before sleeping (REGPU_HANDOFF_SPIN), vblank kicked before a wait's drain, drain timing per site (REGPU_PERF)
     'regpu-frame-size'               # PGR3 port: the guest frame size follows the front buffer (1024x600 races render at the output's full size; REGPU_FIXED_FRAME_SIZE)
     'regpu-texture-budget-cached'    # PGR3 port: the texture budget asks the driver each texture's size once, not every 64 frames (p99 6.1 -> 4.5 ms; REGPU_TEXTURE_BUDGET_ASK_ALL)
+    'regpu-ring-ahead'               # PGR3 port: upload rings made ahead on a thread of their own (auto mode's first trial and ring growth no longer stall frames; REGPU_RING_SYNC)
+    'regpu-texture-copy-threads'     # PGR3 port: DXT texture levels copied into the upload ring on 3 helper threads, waited for at submission (REGPU_SYNC_TEXTURE_COPIES)
+    'regpu-frame-room'               # PGR3 port: REGPU_FRAME_ROOM_HEIGHT, EDRAM surfaces tall enough for the title's smallest guest frame from the start
+    'regpu-index-watch'              # PGR3 port: index buffers write-watched (Host::watchArm/watchClean) instead of hashed once a frame (REGPU_NO_INDEX_WATCH, REGPU_INDEX_VERIFY)
 )
 
 function Invoke-Git { & git @args; if ($LASTEXITCODE -ne 0) { throw "git $args failed ($LASTEXITCODE)" } }
