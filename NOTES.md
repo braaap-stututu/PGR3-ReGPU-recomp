@@ -1,73 +1,85 @@
 # PGR3 ReGPU: notes
 
-## Start here (session 5)
+## Start here (session 6)
 
-**State (session 4, 2026-11-19):** boot to race works and the London grid matches the console. The 30 fps lock is
-removed; two optimisation passes: AI benchmark race, 720p uncapped, **29.7 -> 296 (session 3) -> 389 fps** (session 4:
-std::atomic inlined via `-mcx16`, ring chunks, vblank on wait, handoff spin; see the session 4 log; 339 at the old 360 cap,
-which the race now reaches in stretches: benchmark with `PGR3_MAX_FPS=1000`). 1440p 4x: 370.5 fps. 4K 4x is GPU-bound
-(grid 229 fps, GPU 4.2 ms). Frozen grid ~320-340. Repo:
-https://github.com/braaap-stututu/PGR3-ReGPU-recomp (public, main; session 4 committed and pushed at its end). ReGPU
-patch stack: 94. **New: a launcher** (`launcher.cmd`, the "Project Gotham Racing 3" shortcut in the main folder;
-launcher/PGR3Launcher, ported from FM3's; see the end of the session 4 log): the user is test-driving it. Untested parts:
-its benchmark button and the folder picker. The user wants optimising done autonomously: measurable work goes in,
-anything needing their opinion waits in the list below until they ask for a report.
+**State (end of session 5, 2026-11-20):** boot to race works, the London grid matches the console. Repo
+https://github.com/braaap-stututu/PGR3-ReGPU-recomp (public, main; session 5 committed and pushed: 221df65, ee9e608,
+ca24eb5, 1a78578, then this docs update). **ReGPU patch stack: 100** (`tools\setup.ps1 -NoBuild` must say "all 100
+patches already applied"). The user's ReGPU fork github.com/braaap-stututu/ReGPU has branches **`pgr3`** (this stack,
+one commit per patch, + PORT-PATCHES.md; at d1729b6) and **`fm3`** (FM3's 90), both from our pinned upstream 57143cb;
+the fork's main is untouched (35 upstream commits ahead of 57143cb). Keep `pgr3` in sync when patches change: add commits
+on top in the scratchpad clone (or a fresh clone), check its tree equals thirdparty/ReGPU's, push (session 5 log).
+
+Session 5 in short (details in its log below):
+- **Races render at the selected resolution** (regpu-frame-size: the guest frame size follows the front buffer, 1024x600
+  in races; 1440p = native 2560x1440; upscalers/AA/ultrawide now work in races; the user confirmed race -> menu works).
+  regpu-frame-room + the port's `REGPU_FRAME_ROOM_HEIGHT=600`: EDRAM surfaces sized for it from the boot.
+- **Stutters:** the every-64-frames texture budget walk (regpu-texture-budget-cached), upload rings made ahead
+  (regpu-ring-ahead; PGR3 starts at 256 MB), DXT texture copies on 3 helper threads (regpu-texture-copy-threads),
+  index buffers write-watched instead of hashed (regpu-index-watch) + src/memory.cpp: lock-free WriteWatchClean and a
+  **fault-handler race fix** (a write during a page's disarm crashed the game).
+- **Upload ring: auto by default** (the user's decision): VRAM at native 1440p 4x, system memory at 720p 1x.
+- The benchmark now reports per-frame **1% / 0.1% lows, p99/p99.9 and stutter counts** ("per frame:" line, result.json).
+
+**Numbers (AI race, the user's settings 1440p 4x MSAA + CMAA 2, DXC):** cap 1000, VRAM ring: ~350-360 fps, 1% low
+~200-215, 0.1% low ~165-180, p99 ~4.4-4.6 ms, no frame over 16.7 ms in the window. Cap 360 (how the user plays), auto
+ring: ~330 fps, 1% low ~205-212, 0.1% low ~170, worst ~7-8 ms. Race start (before GO): one ~55 ms frame (the first race
+frame: 486 textures, 4,500 first draws) and one ~19 ms. 720p 1x grid ~310-325. Absolute fps drifts a few % over an hour
+on this PC: **compare only interleaved runs**.
+
+**Where the frame goes now:** the slowest race seconds have 4,400-4,800 draws a frame, the draw thread at 100% and the
+GPU at ~2.4 ms: the 1% low is ReGPU's draw-thread cost per draw (~0.8 us). Draw-thread pieces (workers) still lose 8%.
 
 **Open decisions for the user (don't change without asking):**
-1. `REGPU_INDEX_SAMPLED_HASH` on? +1.5% (4/4), not exact.
-2. `REGPU_NO_WAIT_DRAIN` on? (session 3: +1.3% grid). Its partner `REGPU_NO_INTERRUPT_DRAIN` is **unsafe**: combined
-   with a skipped wait drain it crashed the boot in session 4 (D3D "Unanticipated CPU_INTERRUPT"); keep it off.
-3. ~~Upload ring default~~ **decided (session 5): auto** (`REGPU_UPLOAD_RING_AUTO`, src/gpu_host.cpp; settings.ini `upload_ring=auto|system|vram` by hand, launcher toggle "Upload ring always in VRAM" = vram). Scripted runs (pgr3ctl Start-Pgr3Dev) pin `REGPU_UPLOAD_RING_AUTO=0` (system memory) for steady A/Bs.
-4. Default frame cap: still max_fps 60 + vsync; raise it?
-5. (session 4) Two `amdxc64.dll+4BC0AA` crashes in ~75 boots with FXC (FM3's DXC crash address), at race load: run a
-   boot series and turn on `REGPU_PSO_LOCK=1` for FXC too?
-6. (session 4) FM3's build lacks `-mcx16` too (std::atomic never inlined: +7-18% here): port the fix to FM3?
-7. (session 4) settings.ini's max_fps stops at 360 (the launcher's list too) while the race now runs ~389 uncapped:
-   allow higher caps for players? (`PGR3_MAX_FPS` from the environment already goes to 1000 for testing.)
+1. `REGPU_INDEX_SAMPLED_HASH`: superseded by the exact index watch; probably drop the question.
+2. `REGPU_NO_WAIT_DRAIN` on? (session 3: +1.3% grid). `REGPU_NO_INTERRUPT_DRAIN` is **unsafe** (crashed the boot).
+3. Default frame cap: still max_fps 60 + vsync in a fresh settings.ini; raise it?
+4. Two `amdxc64.dll+4BC0AA` crashes in ~75 boots with FXC (session 4): `REGPU_PSO_LOCK=1` for FXC too? (The user
+   plays with DXC.)
+5. Port `-mcx16` (+7-18% here) and the session-5 stutter patches to FM3?
+6. settings.ini max_fps stops at 360 (the launcher too); allow more?
+7. Send upstream: regpu-cf-jump-past-end, regpu-promote-notify; the fault-handler race is port code (FM3 has the same
+   memory.cpp lineage? check).
 
-**How to measure (session 3 tools; Claude may run these itself, minimized, on out\user-route, never out\user):**
-- `. .\tools\ab.ps1; Start-Pgr3AbGrid` (uncapped frozen grid, ~30 s to freeze), then `Invoke-Pgr3AB REGPU_X`
-  (live switch, interleaved rounds; `-Off 1 -On 0` to test turning a default off; `-Env` for PGR3_* switches),
-  `Measure-Pgr3Fps`. Boot-time options: `Invoke-Pgr3BootAB ([ordered]@{ a = @{}; b = @{ NAME = 'v' } })`.
-  Grid at session 4 defaults: ~320-340 fps (720p 1x; boots vary ~7%: prefer live A/Bs or 3+ rounds). Code changes: boot A/B of two exes (`PGR3_AB_EXE`).
-- `. .\tools\benchmark.ps1; Invoke-Pgr3Benchmark -Label x -Seconds 60 -Env @{ PGR3_MAX_FPS='1000'; PGR3_VSYNC='0' }` (1000: env only, settings.ini stays 30-360; at 360 the race hits the cap):
-  the AI drives the race, results in out\bench\runs.csv. Session 4 defaults, cap 1000: 391.4 / 386.6 fps (1440p 4x 370.5 / 370.6).
-- Profiling: `PGR3_SAMPLE_THREAD=name:gpu draw worker` (or a guest thread id: 1 = game main, 5 = command processor),
-  `PGR3_SAMPLE_CALLERS=6`; live `switch REGPU_PERF 1` for CP wait targets and drain counts.
-- Close the test game before every rebuild (`Close-Pgr3`): a running exe makes the link fail and the old exe runs.
-- New ReGPU patch: edit thirdparty/ReGPU, then `.\tools\make_patch.ps1 -Name regpu-x`, add it to tools/setup.ps1 and
-  patches/README.md, `.\tools\setup.ps1 -NoBuild` (must say "all N patches already applied").
-- PowerShell 5.1 `Set-Content -Encoding utf8` adds a BOM: strip it (`sed -i '1s/^\xEF\xBB\xBF//'`) or use Edit.
+**Next optimisation ideas (the draw thread's per-draw cost = the 1% low):**
+1. UploadGuest: sampled ContentHash + copies ~5% (careful: buffers rewritten between draws, the FH1 skid-mark comment).
+2. FrameMap<IBV>::Put/Find for index views ~2-3% (a per-frame thread_local map).
+3. VertexCache copies of changed vertex data ~3% (real work; maybe helper threads like the texture copies).
+4. RGBA (565/8888) texture uploads still decode on the draw thread (level 0 is decoded early for dumps/UMA).
+5. Race start: the first race frame (~55 ms) and the loading-screen frame (~50 ms): one-time, low priority.
+6. The game's main thread (~80% busy in races) is next after the draw thread (ReXenon options, PGO).
 
-**Where the frame goes:** ReGPU's draw thread is the limit on the grid (~98% busy) and in the race (96-98% with the
-cap at 1000; the earlier "85%" was the 360 cap). GPU 1.8 ms (720p), 2.4 ms (1440p 4x); 4K 4x is GPU-bound. In the
-race the game's main thread is also ~80% busy, so it is next after the draw thread.
+**How to measure (Claude may run these itself, minimized, on out\user-route, never out\user):**
+- `. .\tools\benchmark.ps1; Invoke-Pgr3Benchmark -Label x -Seconds 40 -Settle 5 -Env @{ PGR3_RESOLUTION='2560x1440';
+  PGR3_MSAA='4'; PGR3_AA='cmaa2'; PGR3_VSYNC='0'; REGPU_DXC='1'; PGR3_MAX_FPS='1000'; REGPU_GPU_UPLOAD_RING='1' }`
+  = the user's settings at cap 1000; output line 1 = per-second summary, line 2 = **per frame** (lows, p99, stutters).
+  For stutter work use cap 360 + `REGPU_UPLOAD_RING_AUTO='1'` (what the user runs). A/B = alternating variants
+  (a, b, b, a), at least 2+2 runs of 40 s, launched with `run_in_background` (~90 s a run).
+- Scripted runs pin `REGPU_UPLOAD_RING_AUTO=0` (tools/pgr3ctl.ps1 Start-Pgr3Dev): system memory unless -Env sets
+  `REGPU_GPU_UPLOAD_RING=1` or the auto mode.
+- Grid: `. .\tools\ab.ps1; Start-Pgr3AbGrid -Env @{...}`, `Measure-Pgr3Fps`, `Invoke-Pgr3BootAB` (exe copies via
+  `PGR3_AB_EXE`, e.g. build\ab\s5base). The grid has no stutters (time frozen): use the race for lows.
+- Profiling: `PGR3_SAMPLE_THREAD=name:gpu draw worker`, `PGR3_SAMPLE_CALLERS=2..6`, `PGR3_SAMPLE_LINES=1` (works in the
+  benchmark: sum the "profile:" windows between "benchmark: measuring" and "done"). The perf lite log prints
+  "long frame N" lines (over 2x the average) with a breakdown. `PGR3_LONG_STACKS=5` with
+  `PGR3_LONG_STACKS_THREAD=guest 1 ` or `PGR3_SPIKES=1` sample threads in long frames, but the 1 ms sampler itself
+  perturbs the race (never judge stutters with it on). GPU: `REGPU_GPU_PASSES=1`, `REGPU_GPU_SHADERS=1`.
+- Correctness: `REGPU_INDEX_VERIFY=1` (index watch), `REGPU_VERTEX_VERIFY=1`; screenshots `Pgr3 "shot <path>"` and a
+  pure-Python PNG diff (no PIL here; the race's opponent cars vary with boot timing, so compare like with like).
+- Close the test game before every rebuild (`Close-Pgr3`). New ReGPU patch: edit thirdparty/ReGPU, then
+  `.\tools\make_patch.ps1 -Name regpu-x` (it diffs against ALL listed patches: to regenerate the last one, remove its
+  line from setup.ps1 first, then restore it), add it to tools/setup.ps1 + patches/README.md, `.\tools\setup.ps1
+  -NoBuild`. Never `git checkout` inside thirdparty/ReGPU (revert by edit).
+- Build: `cmd /c "tools\vcenv.cmd ninja -C build\rel"`; launcher: `dotnet build launcher\PGR3Launcher -c Release`.
 
-**Next optimisation ideas, roughly by expected value:**
-1. Draw-thread per-draw cost (grid limit): GetIndexBuffer + FullHashAvx2 (~6%, exact full hash once a frame per
-   buffer), g_textureMutex taken per new index buffer, FrameMap<IBV>::Put (2.3%) stalling behind the ring stores.
-2. Parallel pieces (the way past a saturated draw thread) still lose: grid boot A/B 3 rounds, cap 1000: alone 335.5,
-   3 workers 300.0 (-10.6%, draw thread 81%), 6 workers 296.9 (61%). `REGPU_TRACE_PIECES`: a piece costs ~150-300 us
-   whether a segment is cut in 1, 2 or 4, so the cost is per piece, not per draw; suspect the per-thread caches (index
-   buffer hashes, upload copies, pipeline/binding memos are thread_local: each worker redoes them). Only 8 of 41
-   segments reach the 192-draw minimum (~2,900 of ~4,300 draws). Next: profile a worker (`PGR3_SAMPLE_THREAD=name:...`)
-   and share those caches across threads (structural).
-3. Game main thread in the race (~80% busy; top: sub_82233B40 9-11%, sub_822291F0 5-6%): next limit after the draw
-   thread (ReXenon options, PGO: FM3's X1/X10).
-4. A weaker-GPU check (the upload-ring trade-off flips when GPU-bound).
-5. Vblank on wait under a frame cap (only uncapped now): latency/p99 at 60 fps; the cap is the user's call.
+**Other open items:** frame-rate-tied bugs at high fps (PGR3-QUIRKS G1; not checked); the rest of the race vs the
+reference video (reflections, shadows, motion blur, results screen); unimplemented imports (`MmQueryStatistics`,
+`XNotifyPositionUI`, `Refresh`, `XMsgSystemProcessCall`, `XamUserCreateAchievementEnumerator`, a few `Vd*`); intro skip,
+DLC, saves/profiles; the launcher's benchmark button and folder picker untested; DLSS/XeSS in races untested.
 
-**Other open items:** frame-rate-tied bugs at high fps (PGR3-QUIRKS G1: gear presses, menu repeat; not checked);
-race at the selected resolution: done (regpu-frame-size, session 5; 1440p -8% fps for 1.5x pixels; race -> menu return untested); rest of the
-race vs the reference video (reflections, shadows, motion blur, results screen); unimplemented imports
-(`MmQueryStatistics`, `XNotifyPositionUI`, `Refresh`, `XMsgSystemProcessCall`, `XamUserCreateAchievementEnumerator`, a few
-`Vd*`); intro skip, DLC, saves/profiles; send `regpu-cf-jump-past-end` upstream.
-
-Testing: the user runs the launcher or `play.cmd` (both out\user). Claude: `. tools\pgr3ctl.ps1; Start-Pgr3Dev` (port 7342, minimized,
-out\user-route); the grid route (`Start-Pgr3Grid`) replaces the old manual pad route. Permission to open/close the game
-was given for sessions 3 and 4 (autonomous optimising) only: ask again. Launcher work: `dotnet build
-launcher\PGR3Launcher -c Release` (close it first); test it with PGR3_USER_DIR pointed at a scratch folder, never
-out\user; screenshots of its window via PrintWindow (session 4 log). Reference video: YouTube 5_n5CbsLcrI (0:00-7:50).
+Testing: the user runs the launcher or `play.cmd` (both out\user; their settings in out\user\settings.ini). Claude runs
+only the scripted grid/benchmark boots (minimized, out\user-route). The user asked for autonomous optimising several
+times in session 5; in a new session ask before running the game. Reference video: YouTube 5_n5CbsLcrI (0:00-7:50).
 
 Plan: [PLAN.md](PLAN.md). Quirks: [PGR3-QUIRKS.md](PGR3-QUIRKS.md). Rules: [CLAUDE.md](CLAUDE.md).
 
@@ -560,7 +572,7 @@ per patch). Patches changed later (e.g. regpu-texture-budget-cached below) are n
   UploadGuest 3.4%, index FullHash 3.6%, FrameMap::Put 1.7%), VertexCache copies 1.9% (real changed data).
 - Inlining the pass accessors (ScaleX/Y, PassWidth/Height, WidePass/OutputWide memoised in the snapshot; ~3% as
   calls in the profile): boot A/B 4 rounds 323.0 -> 322.5, **no gain, reverted**.
-- Write-watch to skip re-hashing unchanged index buffers: **not possible**, guest physical memory is a file mapping
+- Write-watch to skip re-hashing unchanged index buffers: **not possible** (WRONG, corrected later in session 5: the port's own page-protection watch works, see regpu-index-watch), guest physical memory is a file mapping
   (src/memory.cpp) and MEM_WRITE_WATCH only works on private VirtualAlloc memory.
 - The 30 s memory report walked every texture with GetResourceAllocationInfo too (one ~6-7 ms frame every 30 s):
   now uses the kept sizes; folded into **regpu-texture-budget-cached** (regenerated; stack 96 OK). 50 s race: no long

@@ -12,10 +12,11 @@ x64, built on [ReXenon](https://github.com/zer0ducksgiven/ReXenon) (the recompil
 - Recompiled: 16,630 functions, no unresolved branches.
 - Boots through the intro movies, menus, car purchase and garage into a race, with sound. The London race matches the
   console.
-- The console's 30 fps lock is removed: an AI-driven benchmark race runs at ~389 fps uncapped at 720p (370 at 1440p with 4x MSAA) on an
-  RX 7900 XTX (29.7 fps locked).
-- Still to do: stretching the 1024x600 race picture to the window, the rest of the race against the console, a few
-  system calls, intro skip, DLC, saves.
+- Races render at the resolution you pick (the console drew them at 1024x600 and stretched them): native 2560x1440
+  at 1440p, with the upscalers, anti-aliasing filters and ultrawide working in races.
+- The console's 30 fps lock is removed: an AI-driven benchmark race runs at ~350 fps uncapped at native 1440p with 4x
+  MSAA on an RX 7900 XTX (29.7 fps locked), 1% low ~200 fps, no stutters over 16.7 ms during the race.
+- Still to do: the rest of the race against the console, a few system calls, intro skip, DLC, saves.
 
 ## Layout
 
@@ -24,6 +25,7 @@ x64, built on [ReXenon](https://github.com/zer0ducksgiven/ReXenon) (the recompil
 | `src/` | Runtime: kernel and XAM, memory, threads, files, audio, input, settings, and the game hooks (`src/hooks/`) |
 | `config/` | ReXenon configuration: function boundaries and jump tables for the disc `default.xex` |
 | `patches/` | Our patch stacks on ReGPU and ReXenon (`patches/README.md` lists each one and why) |
+| (fork) | The ReGPU stack as commits: github.com/braaap-stututu/ReGPU, branch `pgr3` (one commit per patch) |
 | `tools/` | Setup, recompile, XEX/ISO tools, debug-server client, test grid, benchmark and A/B scripts |
 | `launcher/` | The launcher (.NET 9, Photino + WebView2), ported from our FM3 one: Play, Graphics, Benchmark, Settings |
 | `thirdparty/` | ReGPU, ReXenon, meshoptimizer (submodules; patched by `tools/setup.ps1`) |

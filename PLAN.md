@@ -5,13 +5,14 @@ for Windows x64 on ReXenon/XenonRecomp + ReGPU (D3D12), following the PGR4-ReGPU
 (<https://github.com/zer0ducksgiven/PGR4-ReGPU>) and our FM3-ReGPU recomp
 (`G:\claude code projects\FM3-ReGPU recomp`).
 
-## Status (end of session 4, 2026-11-19)
+## Status (end of session 5, 2026-11-20)
 
 Phases 0-4 done: recompiled (16,630 functions, 0 unresolved), boots to a race that matches the console on the London
-grid. Phase 5 (rendering parity) partly: race frame scaling and the rest of the race still to check. Phase 6 under way:
-30 fps lock removed, test grid + AI benchmark (FM3 style), two optimisation passes 29.7 -> 296 (session 3) -> 339 fps
-uncapped at 720p (389 with the cap lifted); a launcher (launcher.cmd) ported from FM3. Frame-rate-tied bugs (G1) not
-checked yet. Details and next steps: NOTES.md "Start here".
+grid. Phase 5 (rendering parity) partly: races now render at the selected resolution (session 5); the rest of the race
+still to check against the reference. Phase 6 under way: 30 fps lock removed, test grid + AI benchmark with per-frame
+lows, optimisation and stutter passes (sessions 3-5; 1440p 4x race ~350 fps uncapped, 1% low ~200, no stutters over
+16.7 ms in a race); a launcher (launcher.cmd). ReGPU patch stack 100, mirrored to the user's ReGPU fork (branch pgr3).
+Frame-rate-tied bugs (G1) not checked yet. Details and next steps: NOTES.md "Start here".
 
 ## Strategy in one paragraph
 
