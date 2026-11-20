@@ -54,7 +54,7 @@ PGR4/FM3 runtime, and 22 `Vd*` calls are handled inside ReGPU. The rest:
 
 | # | Quirk | Source | Status |
 |---|---|---|---|
-| R0 | **Races render at 1024x600** (menus 1280x720): the front buffer is 1024x600; the console's scaler upscales it | session 2 | presented centred (regpu-front-buffer-size); scaling to do |
+| R0 | **Races render at 1024x600** (menus 1280x720): the front buffer is 1024x600; the console's scaler upscales it | session 2 | **fixed** (regpu-frame-size, session 5): the guest frame size follows the front buffer; races render at the full output size (1440p: 2560x1440) and the upscalers apply |
 | R0b | Buildings black: shader branches after the first exec end (reached by conditional jumps, e.g. ps 576b4098 CF 2 -> 39) were never translated | session 2 | **fixed** (regpu-cf-jump-past-end) |
 | R0c | Sky blown out white: the adaptive tone map reacting to the black buildings | session 2 | **fixed** with R0b |
 | R1 | Predicated tiling: debug modes `1280x720 2xMSAA 2 Tiles H/V`, `4xMSAA 4 Tiles`; check the real render size against the "1138x640" reports | strings | seen (strings) |

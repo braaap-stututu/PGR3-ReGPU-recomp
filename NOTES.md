@@ -58,7 +58,7 @@ race the game's main thread is also ~80% busy, so it is next after the draw thre
 5. Vblank on wait under a frame cap (only uncapped now): latency/p99 at 60 fps; the cap is the user's call.
 
 **Other open items:** frame-rate-tied bugs at high fps (PGR3-QUIRKS G1: gear presses, menu repeat; not checked);
-race frame scaling (1024x600 presented centred: stretch it like the console's scaler); rest of the
+race at the selected resolution: done (regpu-frame-size, session 5; 1440p -8% fps for 1.5x pixels; race -> menu return untested); rest of the
 race vs the reference video (reflections, shadows, motion blur, results screen); unimplemented imports
 (`MmQueryStatistics`, `XNotifyPositionUI`, `Refresh`, `XMsgSystemProcessCall`, `XamUserCreateAchievementEnumerator`, a few
 `Vd*`); intro skip, DLC, saves/profiles; send `regpu-cf-jump-past-end` upstream.
@@ -473,3 +473,62 @@ first use); the "Project Gotham Racing 3" shortcut in the main folder opens it (
 Checked: builds with 0 warnings; the window opens and all three tabs render (screenshots); a change is written to
 settings.ini; Play starts pgr3.exe with the launcher's folders (the user closed that test start). Not checked: the
 benchmark button, the folder pick.
+
+### Session 5 (2026-11-20): research, races at the selected resolution (user's request)
+
+**Measured** (frozen grid, 1440p, `REGPU_TRACE_RESOLVES` for ~34 frames): the race scene is a **2x MSAA surface of
+pitch 1040** (1024 + tile padding), resolved as 1024x600 (colour 8888, then 2_10_10_10/float copies, and depth); bloom
+at 344x200; small passes at 256x256 (pitch 280 2x, pitch 320), 512x512, 64/16/8 squares. No 1280-wide pass in the race.
+
+**Why the race doesn't fill the screen:** ReGPU sizes everything from a fixed guest frame of 1280x720 (`kWidth`/
+`kHeight`, renderer.cpp:87, 44 uses; presenter.cpp:32). `PassScalesSlow` (renderer.cpp ~500): scaleY = output
+height / 720, and only a pass of pitch exactly 1280 is the "wide pass" (`WidePass()`, scaleX = output width / 1280).
+PGR3's 1040-pitch scene is classed as a **helper pass** (pitch < 1280): scale 2.0 both ways at 1440p -> 2048x1200,
+presented centred (regpu-front-buffer-size). Side effects of the same misclassification (read from the code, not
+tested): Hor+/wide aspect, the motion vectors (`wantMotion` needs WidePass), and the scene-end detection for the
+upscalers/AA filters (resolve >= 1280x720, renderer.cpp ~10796) never fire in a race. With an upscaler or post-AA on,
+each race frame is taken for "a menu": the swap upscales the whole front buffer, HUD included, and retries every 120
+frames (renderer.cpp ~17214). DLSS/FSR/XeSS/TAA/FXAA are effectively broken in races now.
+
+**Options:**
+- **A (recommended): a guest frame size in ReGPU** (game-neutral patch, `regpu-frame-size`): replace the constants by a
+  current frame (width, height, pitch): 1280x720/1280 by default, 1024x600/1040 when the front buffer the title resolves
+  is that size (auto-detected at the swap, from the next frame, with a pass-epoch bump; or set by the port; menus switch
+  back to 1280x720). Then scaleY = out H / 600 (2.4 at 1440p), the wide pass (pitch 1040) scaleX = out W / 1024 (2.5):
+  the race renders at **2560x1440 natively**, stretched 4% horizontally exactly like the console's scaler (assumes the
+  game projects for a 16:9 display: check wheels/circles against the reference video). `OutputWide()` must stay
+  relative to 16:9 (the display aspect), not 1024:600; the minimap scissor mapping (renderer.cpp ~15417) needs the 16:9
+  scale (scaleWide / wide) instead of ScaleY. Host EDRAM surfaces must be sized for the larger scale (SurfaceHeight:
+  1024 rows x 2.4). The other `kWidth` heuristics (scene end, `fetch.Width() >= kWidth`, front-buffer full size, debug
+  shot) move to the frame size. Gains: native race picture, and upscalers/TAA/post-AA/wide aspect start working in
+  races. Cost: 1.5x the pixels (GPU at 1440p 4x ~2.4 ms -> ~3.5 ms estimated: may become GPU-bound near 300 fps there).
+  Also what ReGPU's own docs/xenos-notes.md anticipates ("some use 1024x600 or 1152x640 and will need this made a setting").
+- **B: make the game render 1280x720** (patch its device/back-buffer setup): rejected. 1024x600 with 2x MSAA is what fits
+  the 10 MB EDRAM without tiling (1280x720 2x colour+depth = 14.7 MB); the game's guest allocations (front buffer at
+  01411000, bloom chain) are sized for 1024x600, a bigger resolve would overwrite memory, and every size would have to
+  be found and changed. The host picture would be the same as A.
+- **C: stretch the 2048x1200 picture at presentation** (the old "like the console's scaler" item): small, but upscaled,
+  not native, and fixes none of the side effects. A fallback switch for A at most.
+
+Not started: waiting for the user's go-ahead. This session's grid boot (minimized, out\user-route) was the only game run.
+
+**Session 5, option A implemented (user: "Yes, implement A"):** new patch **`regpu-frame-size`** (95th; setup.ps1,
+patches/README.md). `g_frameWidth/Height` (default 1280x720) follow the front buffer the swap shows (`NoteFrontBuffer`
+-> `ApplyFrameSize` at the next frame start, next to `ApplyOutputSize`); `FramePitch` = width rounded up to 80
+(1024 -> 1040). `WidePass` = pitch in [frame width, frame pitch]; big = pitch > frame pitch; helper = pitch < frame
+width; scaleY = out H / frame H, scaleWide = out W / frame W; tall pass, scene end, `g_drawSamplesResolve`, clear
+extension, VR/triple front-buffer checks on the frame size. `OutputWide` and `TallScaleRoom`/`SurfaceWidth` keep
+1280x720 (display shape, memory). `SurfaceHeight` uses the smallest frame height seen (surfaces remade once at the
+first 600-row frame: 1440p rows 2048 -> 2458). `REGPU_FIXED_FRAME_SIZE=1` (live) = old behaviour.
+Verified (grid boots, 1440p, minimized, out\user-route): log "guest frame 1024x600 (pitch 1040): scale 2.500 x 2.400";
+the race fills 2560x1440 (out\shots\frame1440.png); live flips 1024x600 -> 1280x720 -> 1024x600 work (fixed_on/off);
+FSR 3 now runs on the race scene (1706x960 -> 2560x1440, HUD sharp: fsr3_new.png; the old exe: 2048x1200 centred).
+Not yet: the fps cost (the first reading, ~110 fps, was taken while the user's FM4 session was using the GPU), race ->
+menu return with a real route (the user's test), DLSS/XeSS/TAA/FXAA in races, 1080p/4K/ultrawide shapes.
+**Session 5, regpu-frame-size tests (user: "do the tests now"; FM4 no longer running):** grid boot A/B, 1440p, cap 1000,
+3 rounds interleaved: old exe (build\ab\fixed720) **321.2** fps (GPU 2.90 ms, draw thread 97%), new **294.1** (3.25 ms,
+93%: -8.4%, the 1.5x pixels; draw thread still the main limit), new + `REGPU_FIXED_FRAME_SIZE=1` 318.1 (= old: the
+switch restores it). One boot each (grid, 4 s): 1080p 326 fps (scale 1.875 x 1.8), 4K 217 (3.75 x 3.6, GPU 4.45 ms,
+GPU-bound), 3440x1440 276 (3.359 x 2.4: Hor+ view, HUD in the centred 16:9 area, out\shots\s5_ruw.png), 1440p FXAA 274,
+SMAA 269, TAA 236, FSR 4 (1706x960 -> 2560x1440) 204; all fill the output with the HUD sharp (s5_*.png). Not tested:
+race -> menu return on a real route (the user's), DLSS (AMD GPU here), XeSS (no libxess.dll in build\rel).
