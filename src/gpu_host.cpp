@@ -463,8 +463,23 @@ void GpuStart()
     // GPU 2.4-3.0 ms of a 4.2 ms frame), so the ring stays in system memory by default: 720p 1x 217.8 -> 238.9 fps
     // (+9.7%, 4/4 live rounds), 1440p 4x -> +3.1% (GPU time 2.45 -> 2.97 ms, still far from the limit), picture the
     // same. settings.ini vram_upload_ring=1 puts it in VRAM (for GPU-bound PCs).
-    if (GetSettings().Extra("vram_upload_ring") == "1")
-        DefaultEnv("REGPU_GPU_UPLOAD_RING", "1");
+    // Session 5 (user's decision: auto): since races render at the output's full size (regpu-frame-size) the VRAM ring
+    // wins at 1440p 4x (grid +8.1%, AI race +12%, p99 4.27 -> 3.83 ms) while system memory still wins at 720p 1x, so by
+    // default ReGPU measures both every 30 s and keeps the faster (REGPU_UPLOAD_RING_AUTO, ReGPU patch 57: right at
+    // both; race fps = VRAM fixed; one ~21 ms frame when it moves the ring). settings.ini upload_ring=auto|system|vram
+    // chooses (by hand); without it vram_upload_ring=1 (the launcher's toggle) = VRAM always, else auto.
+    // REGPU_UPLOAD_RING_AUTO=0 in the environment: no auto (the test tools set it, for steady A/Bs).
+    {
+        std::string ring = GetSettings().Extra("upload_ring");
+        if (ring.empty())
+            ring = GetSettings().Extra("vram_upload_ring") == "1" ? "vram" : "auto";
+        if (ring == "vram")
+            DefaultEnv("REGPU_GPU_UPLOAD_RING", "1");
+        else if (ring == "auto")
+            DefaultEnv("REGPU_UPLOAD_RING_AUTO", "1");
+        const char* a = getenv("REGPU_UPLOAD_RING_AUTO");
+        Log("gpu: upload ring %s", a && atoi(a) ? "chosen by measuring (auto)" : ring == "vram" ? "in VRAM" : "in system memory");
+    }
     // Sampled upload hashes (session 3, from PGR4-ReGPU, which ships it): a vertex/constant upload seen before is
     // checked by samples instead of a full hash. Frozen grid 720p 1x 201.9 -> 217.8 fps (+7.9%, 4/4 live rounds), picture
     // the same (1 of 153,600 sampled pixels by 3 levels; old vs old: 3 by 1). Not exact: a buffer changed only where the

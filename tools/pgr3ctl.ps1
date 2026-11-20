@@ -24,7 +24,9 @@ function Start-Pgr3Dev([switch]$Fresh, [hashtable]$Env = @{}, [switch]$Visible) 
   New-Item -ItemType Directory -Force $Pgr3DevRun, $Pgr3DevUser, $Pgr3Shots | Out-Null
   if ($Fresh -and (Test-Path (Join-Path $Pgr3DevUser "profiles"))) { Remove-Item -Recurse -Force (Join-Path $Pgr3DevUser "profiles") }
   $saved = @{}
-  $all = @{ PGR3_USER_DIR = $Pgr3DevUser; REGPU_DEBUG = "1"; REGPU_DEBUG_PORT = "$Pgr3Port" }
+  # REGPU_UPLOAD_RING_AUTO=0 (session 5): scripted runs keep the ring in one place (system memory unless -Env says
+  # REGPU_GPU_UPLOAD_RING=1), so A/Bs aren't disturbed by the auto mode's 30 s trials; -Env @{ REGPU_UPLOAD_RING_AUTO = "1" } for auto.
+  $all = @{ PGR3_USER_DIR = $Pgr3DevUser; REGPU_DEBUG = "1"; REGPU_DEBUG_PORT = "$Pgr3Port"; REGPU_UPLOAD_RING_AUTO = "0" }
   if (-not $Visible) { $all.PGR3_MINIMIZED = "1" }
   foreach ($k in $Env.Keys) { $all[$k] = $Env[$k] }
   foreach ($k in $all.Keys) { $saved[$k] = [Environment]::GetEnvironmentVariable($k); Set-Item "env:$k" $all[$k] }

@@ -64,7 +64,7 @@ public sealed class GameSettings
     public bool PerfLogLight { get; set; }             // perf_log_light: REGPU_PERF_LITE, one line a second in pgr3.log
     public bool AnisoFromGame { get; set; }            // aniso_from_game: each texture's own anisotropy instead of 16x
     public bool DxcShaders { get; set; }               // shader_compiler=dxc
-    public bool VramUploadRing { get; set; }           // vram_upload_ring: ReGPU's upload ring in VRAM (PGR3: off by default, session 3)
+    public bool VramUploadRing { get; set; }           // vram_upload_ring: ReGPU's upload ring always in VRAM; off = chosen by measuring (session 5)
     public bool AsyncPresent { get; set; } = true;     // async_present
     // Launcher only, set on the game's environment at launch (Game.Launch):
     public bool Anisotropy { get; set; } = true;       // off: REGPU_NO_ANISO

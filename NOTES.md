@@ -17,7 +17,7 @@ anything needing their opinion waits in the list below until they ask for a repo
 1. `REGPU_INDEX_SAMPLED_HASH` on? +1.5% (4/4), not exact.
 2. `REGPU_NO_WAIT_DRAIN` on? (session 3: +1.3% grid). Its partner `REGPU_NO_INTERRUPT_DRAIN` is **unsafe**: combined
    with a skipped wait drain it crashed the boot in session 4 (D3D "Unanticipated CPU_INTERRUPT"); keep it off.
-3. Upload ring in system memory as PGR3's default (FM3: VRAM, the user's choice there)? +9.7% here.
+3. ~~Upload ring default~~ **decided (session 5): auto** (`REGPU_UPLOAD_RING_AUTO`, src/gpu_host.cpp; settings.ini `upload_ring=auto|system|vram` by hand, launcher toggle "Upload ring always in VRAM" = vram). Scripted runs (pgr3ctl Start-Pgr3Dev) pin `REGPU_UPLOAD_RING_AUTO=0` (system memory) for steady A/Bs.
 4. Default frame cap: still max_fps 60 + vsync; raise it?
 5. (session 4) Two `amdxc64.dll+4BC0AA` crashes in ~75 boots with FXC (FM3's DXC crash address), at race load: run a
    boot series and turn on `REGPU_PSO_LOCK=1` for FXC too?
@@ -547,3 +547,38 @@ world update 0.07 ms). `PGR3_LONG_STACKS` (sampling every 1 ms, even below its 1
 race (a 30 Hz pattern of 6 ms frames): don't judge spikes with it on. New diagnostics kept (src/long_stacks.cpp):
 `PGR3_LONG_STACKS_THREAD=<description start>` samples another thread (e.g. `guest 1 ` = the game's main thread), and with
 `PGR3_SPIKES=1` each long frame (up to 5 a second) logs what every guest thread did (`SpikeDump` had no caller).
+
+**Session 5, ReGPU fork (user's request):** github.com/braaap-stututu/ReGPU got two branches from our pinned upstream
+commit 57143cb (the fork's main is 35 upstream commits ahead; main untouched): **`fm3`** (FM3's 90 patches) and
+**`pgr3`** (PGR3's 96), one commit per patch (subject `<patch> (<PORT> port)`, body = its patches/README row), sharing the
+first 81 (identical in both projects), each ending with PORT-PATCHES.md (that port's patch table). Each branch's tree
+was checked equal to the project's thirdparty/ReGPU. Built in the scratchpad by a script (python, `git apply --index`
+per patch). Patches changed later (e.g. regpu-texture-budget-cached below) are not on the fork until it is redone.
+
+**Session 5, autonomous optimisation hour (user's request).**
+- Draw-thread profile, 720p grid uncapped (306-323 fps, draw thread 97-99%): flat. Hashing ~8% (ContentHash in
+  UploadGuest 3.4%, index FullHash 3.6%, FrameMap::Put 1.7%), VertexCache copies 1.9% (real changed data).
+- Inlining the pass accessors (ScaleX/Y, PassWidth/Height, WidePass/OutputWide memoised in the snapshot; ~3% as
+  calls in the profile): boot A/B 4 rounds 323.0 -> 322.5, **no gain, reverted**.
+- Write-watch to skip re-hashing unchanged index buffers: **not possible**, guest physical memory is a file mapping
+  (src/memory.cpp) and MEM_WRITE_WATCH only works on private VirtualAlloc memory.
+- The 30 s memory report walked every texture with GetResourceAllocationInfo too (one ~6-7 ms frame every 30 s):
+  now uses the kept sizes; folded into **regpu-texture-budget-cached** (regenerated; stack 96 OK). 50 s race: no long
+  frame at the 30.5/60.5 s reports. Remaining long frames: texture streaming (~86 new textures in a frame, 2.5-3.5 ms
+  of decoding on the draw thread, e.g. ~39.5 s into the benchmark race).
+- GPU at the user's settings (1440p 4x CMAA 2, grid): 3.5 ms; the two scene passes ~1 ms each; per shader nothing
+  stands out (building ps A45814C0 ~0.6 ms over ~1,040 draws).
+- **Decision 3 has flipped at the user's settings (native 1440p since regpu-frame-size):** upload ring in VRAM
+  (`REGPU_GPU_UPLOAD_RING=1`, settings.ini vram_upload_ring=1): grid boot A/B 3 rounds 274.7 -> 297.0 (+8.1%, GPU
+  3.49 -> 2.34 ms); AI race 2+2, cap 1000: 316.7 -> 355.4 fps (+12%), p99 4.27 -> 3.83 ms. 720p 1x still prefers
+  system memory. `REGPU_UPLOAD_RING_AUTO=1` picks right at both (720p: system 3.13 vs VRAM 3.33 ms; 1440p: VRAM),
+  same race fps as VRAM fixed (337.1 vs 337.2, 40 s, 2+2), but each switch costs one ~21 ms frame (worst 21-22 ms vs
+  6.3-6.7). Not changed: the user's decision (VRAM by default, auto, or per resolution).
+
+**Session 5, upload ring auto (user: "Auto mode"):** src/gpu_host.cpp: `upload_ring=auto|system|vram` in settings.ini;
+without it `vram_upload_ring=1` = VRAM always, else **auto** (ReGPU re-measures every 30 s, keeps the faster; one ~21 ms
+frame per move). Log line "gpu: upload ring chosen by measuring (auto)". The user's settings.ini (vram_upload_ring=0)
+now gets auto. Launcher: the toggle reads "Upload ring always in VRAM / Off: chosen automatically" (tooltip explains).
+tools/pgr3ctl.ps1 Start-Pgr3Dev sets `REGPU_UPLOAD_RING_AUTO=0` (system memory, as all earlier measurements; -Env to
+override). Verified: unpinned 1440p 4x grid boot chose VRAM at 35 s (3.20 vs 3.67 ms a frame); pinned boots log
+"in system memory". Constants by count stays on (it follows vram_upload_ring != 1, as tested).

@@ -220,8 +220,8 @@
           <div><div class="toggle-title">Performance log</div><div class="toggle-sub">Detailed timings, costs fps</div></div>
           <button class="switch" id="perfLog" role="switch"></button>
         </div>
-        <div class="toggle-row" data-tip="ReGPU's upload ring in video memory (through resizable BAR) instead of system memory. PGR3 runs faster with it in system memory (session 3: +9.7% at 720p); try it if your GPU is the limit.">
-          <div><div class="toggle-title">Upload ring in VRAM</div><div class="toggle-sub">Off by default for PGR3</div></div>
+        <div class="toggle-row" data-tip="Off (default): ReGPU measures every 30 seconds whether the upload ring runs faster in video memory or in system memory and keeps the faster (VRAM at 1440p with MSAA, system memory at 720p; one short hitch when it moves). On: always in video memory (through resizable BAR).">
+          <div><div class="toggle-title">Upload ring always in VRAM</div><div class="toggle-sub">Off: chosen automatically</div></div>
           <button class="switch" id="vramUploadRing" role="switch"></button>
         </div>
         <div class="toggle-row" data-tip="Draws are split across worker threads. Slower on PGR3 so far (session 4: -10%).">
