@@ -108,6 +108,7 @@ $regpuPatches = @(
     'regpu-vblank-on-wait'           # PGR3 port: REGPU_VBLANK_ON_WAIT: a blocked memory WAIT_REG_MEM raises the next vblank at once (PGR3 uncapped: +9% grid)
     'regpu-cp-handoff'               # PGR3 port: CP/draw-thread waits spin before sleeping (REGPU_HANDOFF_SPIN), vblank kicked before a wait's drain, drain timing per site (REGPU_PERF)
     'regpu-frame-size'               # PGR3 port: the guest frame size follows the front buffer (1024x600 races render at the output's full size; REGPU_FIXED_FRAME_SIZE)
+    'regpu-texture-budget-cached'    # PGR3 port: the texture budget asks the driver each texture's size once, not every 64 frames (p99 6.1 -> 4.5 ms; REGPU_TEXTURE_BUDGET_ASK_ALL)
 )
 
 function Invoke-Git { & git @args; if ($LASTEXITCODE -ne 0) { throw "git $args failed ($LASTEXITCODE)" } }

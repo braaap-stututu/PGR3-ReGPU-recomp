@@ -532,3 +532,18 @@ switch restores it). One boot each (grid, 4 s): 1080p 326 fps (scale 1.875 x 1.8
 GPU-bound), 3440x1440 276 (3.359 x 2.4: Hor+ view, HUD in the centred 16:9 area, out\shots\s5_ruw.png), 1440p FXAA 274,
 SMAA 269, TAA 236, FSR 4 (1706x960 -> 2560x1440) 204; all fill the output with the HUD sharp (s5_*.png). Not tested:
 race -> menu return on a real route (the user's), DLSS (AMD GPU here), XeSS (no libxess.dll in build\rel).
+
+**Session 5, frame spikes (user's screenshot: 358 fps, p99 7.51 ms, evenly spaced red bars; returning to menus after a
+race works).** The fps panel marks frames over 2x the average red (ReGPU's long-frame rule). Reproduced with the user's
+settings (AI benchmark, 1440p, 4x MSAA, CMAA 2, cap 360, DXC): p99 6.1-8 ms. Long frames come **every 64 frames**
+(~4 a second): the texture budget check (renderer.cpp, `g_r.frame % 64`) called `GetResourceAllocationInfo` for every
+cached texture on the draw thread under the texture mutex. `REGPU_TEXTURE_BUDGET_MB=0` confirmed it (long 0.2/s, p99
+4.4). New patch **`regpu-texture-budget-cached`** (96th): sizes asked once per resource. A/B 3+3 interleaved: p99 6.1-6.2
+-> 4.4-4.6 ms, long 3.8 -> 0.2/s, fps the same (~314). Left: the 30 s memory report does the same walk once every 30 s
+(one long frame; `REGPU_NO_MEMORY_REPORT=1` removes it); remaining ~0.2 long frames a second not traced.
+Dead ends / tools: the frozen grid has no spikes (0 long; time frozen, but the 64-frame check runs there too: its
+textures are fewer). A game-thread frame probe (removed) showed the game's own frame loop steady (~5 slow frames a second,
+world update 0.07 ms). `PGR3_LONG_STACKS` (sampling every 1 ms, even below its 15 ms dump threshold) itself perturbs the
+race (a 30 Hz pattern of 6 ms frames): don't judge spikes with it on. New diagnostics kept (src/long_stacks.cpp):
+`PGR3_LONG_STACKS_THREAD=<description start>` samples another thread (e.g. `guest 1 ` = the game's main thread), and with
+`PGR3_SPIKES=1` each long frame (up to 5 a second) logs what every guest thread did (`SpikeDump` had no caller).

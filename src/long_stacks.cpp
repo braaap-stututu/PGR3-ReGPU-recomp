@@ -23,6 +23,8 @@
 #include "regpu/driver.h"
 #include "log.h"
 
+void SpikeDump(double ms); // src/kernel/thread.cpp (PGR3_SPIKES)
+
 namespace
 {
 struct LongSample
@@ -49,6 +51,16 @@ void OnLongFrame(uint64_t, double ms, double)
     }();
     if (ms < minMs)
         return;
+    // PGR3_SPIKES (src/kernel/thread.cpp's recorder): what each guest thread did during this frame, at most 5 a second.
+    if (getenv("PGR3_SPIKES"))
+    {
+        static int64_t lastSpike = 0;
+        if (const int64_t now = NowNs(); now - lastSpike > 200000000)
+        {
+            lastSpike = now;
+            SpikeDump(ms);
+        }
+    }
     std::lock_guard lock(g_longMutex);
     if (g_longPending.size() < 16)
         g_longPending.push_back({ NowNs(), ms });
@@ -90,10 +102,15 @@ HANDLE FindDrawThread()
             continue;
         HANDLE h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_LIMITED_INFORMATION, FALSE, te.th32ThreadID);
         PWSTR desc = nullptr;
-        if (h && SUCCEEDED(GetThreadDescription(h, &desc)) && desc && wcsncmp(desc, L"gpu draw worker", 15) == 0)
+        // PGR3_LONG_STACKS_THREAD=<description start> (session 5): another thread, e.g. "guest 1 " (the game's main thread).
+        static const std::wstring want = [] {
+            const char* v = getenv("PGR3_LONG_STACKS_THREAD");
+            return v && *v ? std::wstring(v, v + strlen(v)) : std::wstring(L"gpu draw worker");
+        }();
+        if (h && SUCCEEDED(GetThreadDescription(h, &desc)) && desc && wcsncmp(desc, want.c_str(), want.size()) == 0)
         {
             found = h;
-            Log("long stacks: sampling the draw thread %lu every millisecond", te.th32ThreadID);
+            Log("long stacks: sampling thread %lu (%S) every millisecond", te.th32ThreadID, desc);
         }
         else if (h)
             CloseHandle(h);
