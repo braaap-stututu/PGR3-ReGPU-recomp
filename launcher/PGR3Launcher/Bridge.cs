@@ -119,6 +119,9 @@ public sealed class Bridge
             checks = new
             {
                 exe = File.Exists(Paths.Exe),
+                vulkan = File.Exists(Paths.ExeFor("vulkan")),
+                d3d12 = File.Exists(Paths.ExeFor("d3d12")),
+                exeFromEnv = Environment.GetEnvironmentVariable("PGR3_EXE") is { Length: > 0 },
                 game = File.Exists(Path.Combine(Paths.GameDir, "default.xex")),
                 xex = Xex.Status(Paths.GameDir),
                 running = Game.Running,

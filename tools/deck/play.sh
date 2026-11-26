@@ -8,7 +8,9 @@
 # Desktop Mode: run it from a terminal. Game Mode: add it to Steam as a non-Steam game.
 set -u
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/../.." && pwd)"
-# The Vulkan ReGPU build (build/deckvk, tools/deck/README.md) by default; PGR3_VK=0: the Direct3D 12 one (build/deck).
+# The Vulkan ReGPU build (build/deckvk, tools/deck/README.md) by default; the Direct3D 12 one (build/deck) with PGR3_VK=0
+# or, when PGR3_VK isn't set, the launcher's renderer=d3d12 in out/user/settings.ini.
+if [ -z "${PGR3_VK:-}" ] && grep -qx 'renderer=d3d12' <(tr -d '\r' 2>/dev/null < "$ROOT/out/user/settings.ini"); then PGR3_VK=0; fi
 DEFBUILD=deckvk; [ "${PGR3_VK:-1}" = 0 ] && DEFBUILD=deck
 EXE="${PGR3_EXE:-$ROOT/build/$DEFBUILD/pgr3.exe}"
 PROTON="${PGR3_PROTON:-$HOME/.steam/steam/steamapps/common/Proton 11.0}"

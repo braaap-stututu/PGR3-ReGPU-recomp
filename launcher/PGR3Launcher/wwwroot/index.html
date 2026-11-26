@@ -105,6 +105,13 @@
     </div>
     <section class="panel">
       <div class="panel-head"><h2>Display</h2></div>
+      <div class="field" id="rendererField">
+        <span>Renderer</span>
+        <div class="segmented" id="renderer">
+          <button data-renderer="vulkan" data-tip="The main renderer (ReGPU-V): the one PGR3 is tested on, on Windows and the Steam Deck. Applies at the next start.">Vulkan</button>
+          <button data-renderer="d3d12" data-tip="The older Direct3D 12 renderer (ReGPU with the PGR3 patch stack), a separate build of pgr3.exe. Try it if Vulkan misbehaves on your graphics card. Applies at the next start.">Direct3D 12</button>
+        </div>
+      </div>
       <label class="field" data-tip="The graphics card the game renders on. Automatic is the one Windows picks. Applies at the next start.">
         <span>Graphics card</span>
         <select id="gpu"></select>

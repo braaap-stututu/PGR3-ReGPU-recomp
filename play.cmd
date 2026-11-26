@@ -8,7 +8,12 @@ if not defined PGR3_GAME_DIR set "PGR3_GAME_DIR=%ROOT%game\disc"
 set "PGR3_USER_DIR=%ROOT%out\user"
 set "REGPU_DEBUG=1"
 set "REGPU_DEBUG_PORT=7342"
-if not defined PGR3_BUILD set "PGR3_BUILD=rel"
+rem The renderer is a build: build\rel is the Vulkan one (the main one), build\rel-d3d12 the Direct3D 12 one, picked by
+rem the launcher's renderer setting in out\user\settings.ini (PGR3_BUILD overrides it).
+if not defined PGR3_BUILD (
+    set "PGR3_BUILD=rel"
+    findstr /b /x /c:"renderer=d3d12" "%ROOT%out\user\settings.ini" >nul 2>&1 && set "PGR3_BUILD=rel-d3d12"
+)
 if not exist "%ROOT%build\%PGR3_BUILD%\pgr3.exe" (
     echo build\%PGR3_BUILD%\pgr3.exe is missing: build it first.
     pause

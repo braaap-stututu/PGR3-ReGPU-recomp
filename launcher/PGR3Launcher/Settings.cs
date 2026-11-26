@@ -8,10 +8,33 @@ namespace PGR3Launcher;
 /// <summary>Where things are: the install (pgr3.exe, game\disc) and the user folder.</summary>
 public static class Paths
 {
-    /// <summary>The install folder: PGR3_ROOT, else the first folder up from the launcher that holds build\rel\pgr3.exe
+    // The renderer is built in: each ReGPU is its own pgr3.exe with its own DLLs beside it (dxcompiler differs), so each
+    // lives in its own folder. Vulkan (ReGPU-V, thirdparty/ReGPU-vk) is the main build; Direct3D 12 (thirdparty/ReGPU + the
+    // patch stack) the alternative. First existing path wins: an install, a Windows checkout, the Deck's cross-builds.
+    static readonly string[][] VulkanExes = [["pgr3.exe"], ["build", "rel", "pgr3.exe"], ["build", "deckvk", "pgr3.exe"]];
+    static readonly string[][] D3D12Exes = [["d3d12", "pgr3.exe"], ["build", "rel-d3d12", "pgr3.exe"], ["build", "deck", "pgr3.exe"]];
+    // (Above Root: static fields start in this order, and FindRoot reads these.)
+    /// <summary>The install folder: PGR3_ROOT, else the first folder up from the launcher that holds a pgr3.exe build
     /// (a source checkout) or pgr3.exe itself (an install).</summary>
     public static readonly string Root = Env("PGR3_ROOT") ?? FindRoot();
-    public static string Exe => Env("PGR3_EXE") ?? (File.Exists(Path.Combine(Root, "pgr3.exe")) ? Path.Combine(Root, "pgr3.exe") : Path.Combine(Root, "build", "rel", "pgr3.exe"));
+
+    public static string ExeFor(string renderer)
+    {
+        var list = renderer == "d3d12" ? D3D12Exes : VulkanExes;
+        var paths = list.Select(p => Under(Root, p)).ToList();
+        return paths.FirstOrDefault(File.Exists) ?? paths[1];
+    }
+    /// <summary>PGR3_EXE, else the build of the renderer chosen in the launcher.</summary>
+    public static string Exe => Env("PGR3_EXE") ?? ExeFor(GameSettings.Load().Renderer);
+    public static IEnumerable<string> AllExes
+    {
+        get
+        {
+            if (Env("PGR3_EXE") is { } e) yield return e;
+            foreach (var p in VulkanExes.Concat(D3D12Exes)) yield return Under(Root, p);
+        }
+    }
+    static string Under(string root, string[] parts) => Path.Combine(new[] { root }.Concat(parts).ToArray());
     /// <summary>The extracted Europe disc: game\disc in a source checkout (play.cmd's), else game\.</summary>
     public static string GameDirDefault => Directory.Exists(Path.Combine(Root, "game", "disc")) ? Path.Combine(Root, "game", "disc") : Path.Combine(Root, "game");
     /// <summary>PGR3_GAME_DIR, else the folder chosen in the launcher, else the default.</summary>
@@ -31,7 +54,7 @@ public static class Paths
     static string FindRoot()
     {
         for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
-            if (File.Exists(Path.Combine(dir.FullName, "build", "rel", "pgr3.exe")) || File.Exists(Path.Combine(dir.FullName, "pgr3.exe")))
+            if (VulkanExes.Concat(D3D12Exes).Any(p => File.Exists(Under(dir.FullName, p))))
                 return dir.FullName;
         return Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, ".."));
     }
@@ -53,6 +76,8 @@ public sealed class GameSettings
     public string Aa { get; set; } = "off";
     public string Ssaa { get; set; } = "1";
     public bool Eqaa { get; set; }
+    public string Renderer { get; set; } = "vulkan";   // renderer: vulkan (main) | d3d12; launcher only, picks the pgr3.exe build (Paths.Exe)
+    public static readonly string[] Renderers = ["vulkan", "d3d12"];
     public string Gpu { get; set; } = "";             // gpu: the graphics card by name (ReGPU's REGPU_ADAPTER); "" = Windows' choice
     public string Upscaler { get; set; } = "off";
     public int Upscale { get; set; } = 1;              // upscale_quality: 0 native .. 4 ultra performance
@@ -75,7 +100,7 @@ public sealed class GameSettings
     public bool DebugServer { get; set; } = true;      // REGPU_DEBUG on port 7342 (tools\pgr3ctl.ps1)
     public string GameFolder { get; set; } = "";       // launcher only: empty = Paths.GameDirDefault
 
-    static readonly string[] Known = ["profile", "gpu", "resolution", "aspect", "fullscreen", "vsync", "max_fps", "msaa", "aa", "ssaa", "eqaa",
+    static readonly string[] Known = ["profile", "renderer", "gpu", "resolution", "aspect", "fullscreen", "vsync", "max_fps", "msaa", "aa", "ssaa", "eqaa",
         "upscaler", "upscale_quality", "sharpness", "language", "perf_preset", "fps_panel", "perf_log_light", "aniso_from_game",
         "shader_compiler", "vram_upload_ring", "async_present", "anisotropy", "hide_shader_overlay", "timer", "perf_log", "draw_workers",
         "debug_server", "game_folder"];
@@ -97,6 +122,7 @@ public sealed class GameSettings
                 case "ssaa": s.Ssaa = Options.Ssaa.Any(x => x.Value == v) ? v : "1"; break;
                 case "eqaa": s.Eqaa = v == "1"; break;
                 case "gpu": s.Gpu = v; break;
+                case "renderer": s.Renderer = Renderers.Contains(v) ? v : "vulkan"; break;
                 case "upscaler": s.Upscaler = Options.Upscalers.Any(u => u.Value == v) ? v : "off"; break;
                 case "upscale_quality": s.Upscale = int.TryParse(v, out var q) ? Math.Clamp(q, 0, 4) : 1; break;
                 case "sharpness":
@@ -132,6 +158,7 @@ public sealed class GameSettings
         sb.Append($"resolution={Resolution}\naspect={Aspect}\nfullscreen={B(Fullscreen)}\nvsync={B(Vsync)}\nmax_fps={Math.Clamp(MaxFps, 30, 360)}\n");
         sb.Append($"msaa={(Options.Msaa.Any(x => x.Value == Msaa) ? Msaa : 1)}\n");
         sb.Append("aa=" + (Options.Aa.Any(x => x.Value == Aa) ? Aa : "off") + "\nssaa=" + (Options.Ssaa.Any(x => x.Value == Ssaa) ? Ssaa : "1") + "\neqaa=" + B(Eqaa) + "\n");
+        sb.Append($"renderer={(Renderers.Contains(Renderer) ? Renderer : "vulkan")}\n");
         sb.Append($"gpu={new string(Gpu.Where(c => !char.IsControl(c) && c != '=').ToArray()).Trim()}\n");
         sb.Append($"upscaler={(Options.Upscalers.Any(u => u.Value == Upscaler) ? Upscaler : "off")}\nupscale_quality={Math.Clamp(Upscale, 0, 4)}\nsharpness={sharp}\n");
         sb.Append($"language={Language}\n");
@@ -301,7 +328,7 @@ public static class Game
 {
     public static bool Running => Process.GetProcessesByName("pgr3").Any(p =>
     {
-        try { return string.Equals(p.MainModule?.FileName, Paths.Exe, StringComparison.OrdinalIgnoreCase); }
+        try { var f = p.MainModule?.FileName; return Paths.AllExes.Any(e => string.Equals(f, Path.GetFullPath(e), StringComparison.OrdinalIgnoreCase)); }
         catch { return true; }
     });
 
@@ -342,7 +369,7 @@ public static class ShaderCache
     public sealed record Info(bool Exists, int Shaders, long Bytes, DateTime? Built);
 
     static readonly string[] Dirs = ["shadercache", "shaders"];
-    static readonly string[] Files = ["pipelines.bin", "pipelines.manifest", "static_shaders.bin"];
+    static readonly string[] Files = ["pipelines.bin", "pipelines-dxil.bin", "pipelines.manifest", "static_shaders.bin"];
 
     public static Info Get()
     {
@@ -353,9 +380,9 @@ public static class ShaderCache
             foreach (var f in new DirectoryInfo(d).EnumerateFiles("*", SearchOption.AllDirectories))
             {
                 bytes += f.Length;
-                if (f.Extension is ".dxbc" or ".dxil" or ".ucode") count++;
+                if (f.Extension is ".dxbc" or ".dxil" or ".spv" or ".ucode") count++;
             }
-        foreach (var f in Files.Select(f => new FileInfo(Path.Combine(Paths.User, f))).Where(f => f.Exists))
+        foreach (var f in CacheFiles())
         {
             bytes += f.Length;
             if (f.Name is "pipelines.bin" or "pipelines.manifest") built = f.LastWriteTime;
@@ -367,6 +394,15 @@ public static class ShaderCache
     {
         if (Game.Running) throw new InvalidOperationException("Close the game first: it is using the shader cache.");
         foreach (var d in Dirs.Select(d => Path.Combine(Paths.User, d)).Where(Directory.Exists)) Directory.Delete(d, true);
-        foreach (var f in Files.Select(f => Path.Combine(Paths.User, f)).Where(File.Exists)) File.Delete(f);
+        foreach (var f in CacheFiles()) f.Delete();
+    }
+
+    /// <summary>The cache files in the user folder: both renderers' (the Vulkan one's pipeline cache is per GPU:
+    /// vk-pipelines-&lt;vendor&gt;-&lt;device&gt;.bin).</summary>
+    static IEnumerable<FileInfo> CacheFiles()
+    {
+        var fixedFiles = Files.Select(f => new FileInfo(Path.Combine(Paths.User, f))).Where(f => f.Exists);
+        var vk = Directory.Exists(Paths.User) ? new DirectoryInfo(Paths.User).EnumerateFiles("vk-pipelines-*.bin") : Enumerable.Empty<FileInfo>();
+        return fixedFiles.Concat(vk).ToList();
     }
 }

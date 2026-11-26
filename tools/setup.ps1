@@ -169,17 +169,23 @@ Set-PatchStack 'ReXenon' @(
     'rexenon-vsldoi128'              # Primary opcode 4 with bit 4 set decoded as vsldoi128, not a PPC405 MAC form (FM3's 8284AA90)
 )
 
-# The Vulkan ReGPU (ReGPU-V, session 6): thirdparty/ReGPU-vk, branch pgr3vk of github.com/braaap-stututu/ReGPU (fm4deck +
-# main + the PGR3 fixes as commits, no patch stack). CMake builds it instead of thirdparty/ReGPU when it is there
-# (PGR3_REGPU_DIR). Cloned once if missing and the branch exists on GitHub; an existing clone is left as it is.
+# The Vulkan ReGPU (ReGPU-V, session 6), the main renderer: thirdparty/ReGPU-vk, branch pgr3vk of
+# github.com/braaap-stututu/ReGPU (fm4deck + main + the PGR3 fixes as commits, no patch stack). CMake builds it instead
+# of thirdparty/ReGPU when it is there (PGR3_REGPU_DIR); the Direct3D 12 build (build\rel-d3d12) is the launcher's
+# alternative. Made once if missing: the pgr3vk branch from GitHub if it is there, else fm4deck d5a5a65 with the
+# branch's saved diff (patches/regpu-vk/pgr3vk.patch). An existing clone is left as it is.
 $regpuVk = Join-Path $root 'thirdparty/ReGPU-vk'
 if (-not (Test-Path (Join-Path $regpuVk 'src/gpu/vk'))) {
     & git ls-remote --exit-code --heads https://github.com/braaap-stututu/ReGPU pgr3vk *> $null
     if ($LASTEXITCODE -eq 0) {
-        Invoke-Git clone -b pgr3vk https://github.com/braaap-stututu/ReGPU $regpuVk
+        Invoke-Git -c core.autocrlf=false clone -b pgr3vk https://github.com/braaap-stututu/ReGPU $regpuVk
         Invoke-Git -C $regpuVk config core.autocrlf false
     } else {
-        Write-Host 'ReGPU-V: branch pgr3vk not on GitHub yet (push it from the Deck bundle, NOTES.md): building with the D3D12 ReGPU'
+        Invoke-Git -c core.autocrlf=false clone -b fm4deck https://github.com/braaap-stututu/ReGPU $regpuVk
+        Invoke-Git -C $regpuVk config core.autocrlf false
+        Invoke-Git -C $regpuVk checkout -b pgr3vk d5a5a65a4269de0524fadb40e2ad3de25ca0b847
+        Invoke-Git -C $regpuVk apply --whitespace=nowarn (Join-Path $root 'patches/regpu-vk/pgr3vk.patch')
+        Write-Host 'ReGPU-V: thirdparty/ReGPU-vk made from fm4deck + patches/regpu-vk/pgr3vk.patch (uncommitted there)'
     }
 }
 

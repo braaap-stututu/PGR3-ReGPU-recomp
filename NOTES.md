@@ -4,6 +4,16 @@
 
 **Session 7 (2026-11-25, 22:00-00:50): the user asked for an error check, a deep dive for physics/handling telemetry,
 and whether VR and true triple screen can work as in FM3; then "keep working on it" for two hours.**
+- **Session 8 (2026-11-26): Vulkan is the main renderer, Direct3D 12 a launcher switch** (the user's call). Each renderer
+  is its own pgr3.exe build (the ReGPU is linked in; dxcompiler.dll differs), so the launcher picks the exe: settings.ini
+  `renderer=vulkan|d3d12` (launcher-only key, default vulkan), Graphics > Display > Renderer. Vulkan: `pgr3.exe` (install),
+  build/rel (Windows), build/deckvk (Deck); D3D12: `d3d12/pgr3.exe`, build/rel-d3d12, build/deck (Paths.ExeFor in
+  launcher/Settings.cs; a missing build's button is greyed out; PGR3_EXE still overrides). play.cmd and tools/deck/play.sh
+  follow the setting (PGR3_BUILD / PGR3_VK override). setup.ps1 now makes thirdparty/ReGPU-vk from fm4deck d5a5a65 +
+  patches/regpu-vk/pgr3vk.patch when pgr3vk isn't on GitHub (before: silent fallback to D3D12). Both renderers share
+  out/user's caches safely (pipelines.manifest is guest hashes; compiled caches have their own names). **The launcher
+  wasn't compiled (no .NET SDK on the Deck): build it on Windows before trusting it.** Session 7's work committed
+  (2886183), not pushed: no GitHub login on the Deck.
 - **Next (the user decides):** (1) the user checks the sun glare in play facing the sun (`switch REGPU_ZPD_STRICT_END
   1/0`); (2) a headset test: vr=cockpit, then vr=stereo; (3) commits (nothing committed: PGR3 repo, ReGPU-V pgr3vk
   working tree, D3D12 patches 103-106); (4) launcher tabs for telemetry / triple / VR (PGR3's launcher has none;

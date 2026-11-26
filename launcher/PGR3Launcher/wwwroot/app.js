@@ -181,6 +181,12 @@ function render() {
   $("upscaleField").hidden = set.upscaler === "off"
   $("sharpeningField").hidden = set.upscaler === "off" || set.upscaler === "bilinear"
   for (const b of $("display").children) b.classList.toggle("on", (b.dataset.full === "1") === set.fullscreen)
+  // Each renderer is its own pgr3.exe build: a missing one can't be picked (PGR3_EXE set: the launcher runs that one).
+  for (const b of $("renderer").children) {
+    b.classList.toggle("on", b.dataset.renderer === set.renderer)
+    b.disabled = s.checks.exeFromEnv || (b.dataset.renderer !== set.renderer && !s.checks[b.dataset.renderer])
+  }
+  $("rendererField").classList.toggle("off", s.checks.exeFromEnv)
   for (const k of SWITCHES) $(k).classList.toggle("on", !!set[k])
   const preset = Math.max(0, PRESETS.findIndex((p) => p.value === set.perfPreset))
   if (document.activeElement !== $("perfPreset")) $("perfPreset").value = preset
@@ -195,6 +201,7 @@ function render() {
   const line = (label, value) => { const d = el("div"); d.append(label + ": "); d.append(el("b", "", value)); $("summary").append(d) }
   line("Profile", set.profile || "Player")
   line("Display", `${set.resolution.replace("x", " × ")}, ${set.fullscreen ? "fullscreen" : "windowed"}${aspect && set.aspect !== "auto" ? ", " + aspect.name : ""}`)
+  line("Renderer", s.checks.exeFromEnv ? "PGR3_EXE" : set.renderer === "d3d12" ? "Direct3D 12" : "Vulkan")
   if (set.gpu) line("Graphics card", set.gpu)
   line("Frame rate", `${set.maxFps} fps cap, VSync ${set.vsync ? "on" : "off"}`)
   const aaParts = [fsrAa ? named(o.upscalers, set.upscaler).split(" (")[0] : `MSAA ${named(o.msaa, set.msaa)}`]
@@ -210,7 +217,8 @@ function render() {
   const cl = $("checklist")
   cl.replaceChildren()
   const item = (ok, text) => { const d = el("div", "check-item " + (ok ? "ok" : "bad")); d.append(el("span", "dot"), text); cl.append(d) }
-  item(s.checks.exe, s.checks.exe ? "pgr3.exe found" : "pgr3.exe is missing: build it first (README.md)")
+  const rname = set.renderer === "d3d12" ? "Direct3D 12" : "Vulkan"
+  item(s.checks.exe, s.checks.exe ? `pgr3.exe found (${rname})` : `The ${rname} pgr3.exe is missing: build it first (README.md)`)
   item(s.checks.game, s.checks.game ? "Game files found" : "Game files missing: choose the game folder")
   item(s.shaders.exists, s.shaders.exists ? `Shaders compiled (${s.shaders.shaders.toLocaleString()})` : "The first start compiles shaders (a few minutes)")
   if (!benchBusy) {
@@ -313,6 +321,7 @@ $("msaa").onchange = (e) => change({ msaa: +e.target.value })
 $("aa").onchange = (e) => change({ aa: e.target.value })
 $("ssaa").onchange = (e) => change({ ssaa: e.target.value })
 $("gpu").onchange = (e) => change({ gpu: e.target.value })
+for (const b of $("renderer").children) b.onclick = () => { if (!b.disabled) change({ renderer: b.dataset.renderer }) }
 $("perfPreset").oninput = (e) => { const p = PRESETS[+e.target.value]; $("perfPreset-v").textContent = p.name; $("perfPreset-note").textContent = p.note }
 $("perfPreset").onchange = (e) => change({ perfPreset: PRESETS[+e.target.value].value })
 $("upscaler").onchange = (e) => change({ upscaler: e.target.value })

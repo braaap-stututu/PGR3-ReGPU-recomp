@@ -48,8 +48,12 @@ py -3 tools\xiso.py "<PGR3 disc>.iso" extract game\disc   # the game files (neve
 copy game\disc\default.xex game\default.xex
 .\tools\setup.ps1             # submodules, patch stacks, host tools
 .\tools\recomp.ps1 -Base      # game\default.xex -> out\ppc (checks the Europe disc's SHA-256)
+# The main build: the Vulkan renderer (thirdparty/ReGPU-vk, made by setup.ps1)
 cmd /c "tools\vcenv.cmd cmake -S . -B build\rel -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl"
 cmd /c "tools\vcenv.cmd ninja -C build\rel"
+# Optional: the Direct3D 12 renderer, the launcher's Graphics > Display > Renderer switch (play.cmd follows it too)
+cmd /c "tools\vcenv.cmd cmake -S . -B build\rel-d3d12 -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DPGR3_REGPU_DIR=%CD%\thirdparty\ReGPU"
+cmd /c "tools\vcenv.cmd ninja -C build\rel-d3d12"
 launcher.cmd                  # the launcher (builds it on first use; needs the .NET 9 SDK), or:
 play.cmd                      # straight into the game; both keep saves and settings in out\user, the log in out\run\pgr3.log
 ```

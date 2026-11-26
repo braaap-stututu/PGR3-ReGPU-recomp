@@ -109,6 +109,7 @@ public static partial class Benchmark
         var size = SizeLine().Match(log);
         var p99 = rows.Select(r => r[3]).OrderBy(x => x).ToList();
         var options = new List<string>();
+        if (settings.Renderer == "d3d12") options.Add("D3D12");
         if (settings.Upscaler != "off") options.Add($"{settings.Upscaler} q{settings.Upscale}");
         if (settings.PerfPreset != "off") options.Add($"preset {settings.PerfPreset}");
         if (settings.Aa != "off") options.Add(settings.Aa);
