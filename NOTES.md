@@ -1,5 +1,46 @@
 # PGR3 ReGPU: notes
 
+## Start here (session 9)
+
+**Session 8 (2026-11-26): committed and pushed everything; Vulkan made the main renderer (D3D12 a launcher switch);
+then the user's report of brief visual glitches in moving races, investigation half done.**
+- **Repos:** PGR3 main pushed (2886183 sessions 6-7, 7bd2b4f renderer switch, then this session's notes/tools). ReGPU-V
+  branch `pgr3vk` pushed to github.com/braaap-stututu/ReGPU (8fb74d8 = the session 7 ReGPU changes); also kept as
+  patches/regpu-vk/pgr3vk.patch (diff from fm4deck d5a5a65). The Deck has `gh` (~/.local/bin, logged in as
+  braaap-stututu, git uses it): pushes work from here now.
+- **Renderer switch:** see the session 8 bullet under "Start here (session 7)" below. The launcher wasn't compiled (no
+  .NET SDK on the Deck): build it on Windows (launcher.cmd) and check Graphics > Display > Renderer.
+- **The glitches (open, the user's top item):** in every lap, on every track, for a frame or a few (well under 0.1 s):
+  (a) a building part **vanishes** (London ~39.9 s on the user's capture: the building at the right, lap 1);
+  (b) a building face turns **blue/purple with a pink pattern** (London 46.8 s: a shop-front panel low on the
+  left building, normal again at 46.9 s; looks like another texture's data, or a half-written one, for a frame);
+  (c) **dark blotches** in the window bays of the Parliament facade (35.2 -> 35.3 s). The user's frames are their
+  capture-card clips at 1280x720 with the timer on (the timer is the pgr3.log clock). Random in place, every lap.
+  - Ruled out: **the texture write-watch** (REGPU_TEXTURE_WATCH_VERIFY=1 over a full 3-lap AI race: 0 "changed with
+    no write seen"; out/logs/watch-verify.log). PGR3's NtReadFile calls GuestWillWrite before ReadFile, so streamed
+    reads are seen.
+  - Not reproduced in my own recording: tools/deck/race_scan.sh records every frame (debug server `shots 120 DIR raw`
+    bursts) of a full AI race: 5120 frames, no magenta (tools/deck/magenta.sh: only the pink Puma boards), the
+    Parliament stretch smooth. But recording halves the frame rate (26 fps), which may hide a timing race. The raw
+    frames are in out/shots/scan-base (4.4 GB): delete them once this is settled.
+  - **Two suspects left, both live switches:** (1) texture copies on helper threads (pgr3vk ab62f93, Deck session 6;
+    D3D12 patch regpu-texture-copy-threads): the copy reads guest memory after the texture was hashed, so memory the
+    game reuses for a newly streamed texture in between gives another texture's bytes or half-written ones ->
+    purple/garbage, and zero alpha under the alpha test -> a vanished object. `REGPU_SYNC_TEXTURE_COPIES=1` = copy
+    on the draw thread at hash time. (2) occlusion queries answering since session 7 (`REGPU_ZPD_STRICT_END=1` =
+    the old rule): wrong "hidden" answers -> vanished objects.
+  - **Next: the user records one AI race on the capture card and counts glitches per lap:** `tools/deck/race_ab.sh
+    ab1` (default flips: lap 1 as now, at GO+62 s texture copies sync, at GO+124 s copies back + old query rule;
+    flips with their timer readings in out/logs/ab1.flips.txt, log out/logs/ab1.log). GO comes at ~22.5 s on the
+    timer, so lap 2 ~85-147 s, lap 3 ~147-210 s. Ask the user to start recording first, then launch.
+  - If the copies are it: hash (or copy) at record time on the draw thread for textures in memory the title reuses,
+    or keep the threads but read a snapshot; check the D3D12 patch has the same race. If the queries are it: compare
+    REGPU_ZPD_SCALE and per-query answers (REGPU_TRACE_ZPD). If neither: next candidates are index/vertex caches
+    (REGPU_INDEX_NO_WATCH, REGPU_NO_VERTEX_ARENA) and stale resolves (REGPU_NO_STALE_RESOLVES).
+- **Deck gotcha (cost a run this session):** when the external display is DPMS-off, vsync presents run at 1 fps and the
+  race route stalls before GO. The new scripts wake it first (`kscreen-doctor --dpms on`) and inhibit sleep while
+  running (`kde-inhibit --power --screenSaver`).
+
 ## Start here (session 7)
 
 **Session 7 (2026-11-25, 22:00-00:50): the user asked for an error check, a deep dive for physics/handling telemetry,
