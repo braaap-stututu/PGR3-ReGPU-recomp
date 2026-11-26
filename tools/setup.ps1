@@ -113,6 +113,12 @@ $regpuPatches = @(
     'regpu-texture-copy-threads'     # PGR3 port: DXT texture levels copied into the upload ring on 3 helper threads, waited for at submission (REGPU_SYNC_TEXTURE_COPIES)
     'regpu-frame-room'               # PGR3 port: REGPU_FRAME_ROOM_HEIGHT, EDRAM surfaces tall enough for the title's smallest guest frame from the start
     'regpu-index-watch'              # PGR3 port: index buffers write-watched (Host::watchArm/watchClean) instead of hashed once a frame (REGPU_NO_INDEX_WATCH, REGPU_INDEX_VERIFY)
+    'regpu-cf-end-pair-target'       # PGR3 port: a jump target right after the end, in the end's own CF pair, is parsed on to its own end (London's trees, licence plates; REGPU_NO_END_PAIR_TARGET)
+    'regpu-tiny-pass-native-scale'   # PGR3 port: passes on surfaces up to 80 px wide (reductions: PGR3's auto-exposure) drawn at 1:1, not the output's scale (REGPU_SCALE_TINY_PASSES, REGPU_TINY_PASS_PITCH)
+    'regpu-zpd-a-counters-end'       # PGR3 port: an occlusion query whose end marks only the A counters (PGR3's D3D) ends it (queries never ended: no answers, and triple/stereo replays skipped the post-processing; REGPU_ZPD_STRICT_END)
+    'regpu-triple-depth-keep'        # PGR3 port: REGPU_TRIPLE_DEPTH=keep leaves z as it is in the triple-screen mapping (exact for PGR3's reversed infinite projection)
+    'regpu-hud-over'                 # PGR3 port: REGPU_HUD_OVER=<composite ps hash>: triple screen's side screens skip the HUD drawn over the composite (the HUD on the centre screen only)
+    'regpu-triple-share-passes'      # PGR3 port: REGPU_TRIPLE_SHARE_PASSES=1: the triple/stereo recording starts again after the shadow and reflection passes (drawn once for every screen: +20% at 3x720p on the Deck)
 )
 
 function Invoke-Git { & git @args; if ($LASTEXITCODE -ne 0) { throw "git $args failed ($LASTEXITCODE)" } }
@@ -162,6 +168,20 @@ Set-PatchStack 'ReGPU' $regpuPatches
 Set-PatchStack 'ReXenon' @(
     'rexenon-vsldoi128'              # Primary opcode 4 with bit 4 set decoded as vsldoi128, not a PPC405 MAC form (FM3's 8284AA90)
 )
+
+# The Vulkan ReGPU (ReGPU-V, session 6): thirdparty/ReGPU-vk, branch pgr3vk of github.com/braaap-stututu/ReGPU (fm4deck +
+# main + the PGR3 fixes as commits, no patch stack). CMake builds it instead of thirdparty/ReGPU when it is there
+# (PGR3_REGPU_DIR). Cloned once if missing and the branch exists on GitHub; an existing clone is left as it is.
+$regpuVk = Join-Path $root 'thirdparty/ReGPU-vk'
+if (-not (Test-Path (Join-Path $regpuVk 'src/gpu/vk'))) {
+    & git ls-remote --exit-code --heads https://github.com/braaap-stututu/ReGPU pgr3vk *> $null
+    if ($LASTEXITCODE -eq 0) {
+        Invoke-Git clone -b pgr3vk https://github.com/braaap-stututu/ReGPU $regpuVk
+        Invoke-Git -C $regpuVk config core.autocrlf false
+    } else {
+        Write-Host 'ReGPU-V: branch pgr3vk not on GitHub yet (push it from the Deck bundle, NOTES.md): building with the D3D12 ReGPU'
+    }
+}
 
 if ($NoBuild) { return }
 $vcenv = Join-Path $PSScriptRoot 'vcenv.cmd'

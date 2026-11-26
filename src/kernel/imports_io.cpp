@@ -231,14 +231,23 @@ bool VfsResolve(std::string guest, fs::path& host, bool* readOnly)
     else if (ro && root == GameDir() && !rest.empty() && !getenv("PGR3_NO_OVERLAY"))
     {
         std::error_code ec;
-        const fs::path mods = UserDir() / "mods";
-        if (fs::is_directory(mods, ec))
-        {
+        // The mod folders, read once a run (session 6, Steam Deck): this ran for every disc path the game resolves, and
+        // under Wine each is_directory / directory listing is a slow round trip (~1 ms): during the race's streaming it
+        // was ~20 ms of a 324 ms main-thread hitch. Mods added while the game runs are seen at the next start.
+        static const std::vector<fs::path> modDirs = [] {
+            std::error_code e;
             std::vector<fs::path> dirs;
-            for (const auto& d : fs::directory_iterator(mods, ec))
-                if (d.is_directory(ec) && d.path().filename().string().find_first_of("_.") != 0)
-                    dirs.push_back(d.path());
+            const fs::path mods = UserDir() / "mods";
+            if (fs::is_directory(mods, e))
+                for (const auto& d : fs::directory_iterator(mods, e))
+                    if (d.is_directory(e) && d.path().filename().string().find_first_of("_.") != 0)
+                        dirs.push_back(d.path());
             std::sort(dirs.begin(), dirs.end());
+            return dirs;
+        }();
+        if (!modDirs.empty())
+        {
+            const std::vector<fs::path>& dirs = modDirs;
             for (const fs::path& d : dirs)
                 if (const fs::path candidate = d / "game" / fs::path(rest); fs::is_regular_file(candidate, ec))
                     host = candidate;
@@ -462,7 +471,10 @@ GUEST_EXPORT(NtReadFile)
     ov.Offset = DWORD(offset);
     ov.OffsetHigh = DWORD(offset >> 32);
     DWORD read = 0;
-    if (length > (4u << 20))
+    // PGR3_TRACE_LARGE_READS=1: reads over 4 MB with the host stack. (Was always on: the symbolised stack walk, dbghelp,
+    // ran on the reading thread for every 5-8 MB chunk the race streams, slow under Wine: session 6, Steam Deck.)
+    static const bool traceLarge = getenv("PGR3_TRACE_LARGE_READS") != nullptr;
+    if (traceLarge && length > (4u << 20))
     {
         std::string CurrentHostStack(int maxFrames);
         Log("io: large read %s offset %llu length %u -> %08X: %s", file->path.filename().string().c_str(), (unsigned long long)offset, length, buffer,

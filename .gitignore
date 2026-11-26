@@ -19,6 +19,9 @@
 /thirdparty/ffmpeg/
 /thirdparty/fidelityfx/
 /thirdparty/sdl3/
+/thirdparty/dxc/
+/thirdparty/dxc
+/thirdparty/openxr/
 
 # Python
 __pycache__/
@@ -28,3 +31,8 @@ __pycache__/
 *.lnk
 launcher/*/bin/
 launcher/*/obj/
+# Deck build: the fxc stand-in's built exe and its copy of d3dcompiler_47.dll (tools/deck/README.md)
+/tools/deck/fxc/*.exe
+/tools/deck/fxc/*.dll
+# The Vulkan ReGPU clone (own repo; its branch is saved as patches/regpu-vk/pgr3vk.patch)
+/thirdparty/ReGPU-vk/

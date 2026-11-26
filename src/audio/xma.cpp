@@ -190,6 +190,110 @@ void SetRegister(uint32_t r, uint32_t value)
     *GuestPtr<uint32_t>(kApuBase + r * 4) = value;
 }
 
+// ---- Codec reuse (session 6, Steam Deck; ported from the FM4/FM3 ports' Deck work, same libavcodec 62.28.103).
+// Every stream restart takes a fresh codec and frees the old one (Reset, below): in a race ~200 a second, each an XMA2
+// context of a few MB allocated and zeroed (and freed), on the Deck under Proton heap and page-fault work on a 4-core CPU
+// the game shares. A retired codec is instead put back to its just-opened state: FFmpeg's flush, then stream 0's
+// private context and the context's tail (frames, FIFO pointers, current stream, trims, flushed) copied back from a
+// snapshot taken right after avcodec_open2, and the frames emptied. The private context's size comes from libavcodec's
+// FFCodec (right after the public AVCodec and one 32-bit word of bit fields); the XMA context's layout is checked on the
+// first snapshot (num_streams 1, frames[0] set, the other seven empty) and reuse stays off if it doesn't hold.
+// FM4 checked it bit-exact (a shadow codec fed the same packets, 15,000 packets). PGR3_XMA_REUSE=0 (start-time): off.
+bool XmaReuse()
+{
+    static const bool on = [] {
+        const char* v = getenv("PGR3_XMA_REUSE");
+        return !v || !*v || strcmp(v, "0") != 0;
+    }();
+    return on;
+}
+std::mutex g_pristineMutex;
+std::map<AVCodecContext*, std::vector<uint8_t>> g_pristine; // codec -> its private context right after opening
+std::atomic<bool> g_reuseBroken{ false };
+std::atomic<uint64_t> g_codecsRecycled{ 0 };
+constexpr size_t kXmaTail = 256;
+
+size_t PrivDataSize(const AVCodecContext* av)
+{
+    int size = 0;
+    memcpy(&size, reinterpret_cast<const uint8_t*>(av->codec) + sizeof(AVCodec) + sizeof(unsigned), sizeof(size));
+    return size >= int(kXmaTail + 4096) && size <= (64 << 20) && size % 32 == 0 && (size - kXmaTail) % (8 * 32) == 0 ? size_t(size) : 0;
+}
+
+AVFrame** XmaFrames(AVCodecContext* av, size_t size)
+{
+    return reinterpret_cast<AVFrame**>(static_cast<uint8_t*>(av->priv_data) + size - kXmaTail);
+}
+
+void SnapshotCodec(AVCodecContext* av)
+{
+    if (!XmaReuse() || g_reuseBroken)
+        return;
+    const size_t size = PrivDataSize(av);
+    bool ok = size != 0;
+    if (ok)
+    {
+        AVFrame** frames = XmaFrames(av, size);
+        int current = -1, streams = -1;
+        memcpy(&current, frames + 8, sizeof(int));
+        memcpy(&streams, reinterpret_cast<const uint8_t*>(frames + 8) + sizeof(int), sizeof(int));
+        ok = frames[0] && current == 0 && streams == 1;
+        for (int i = 1; i < 8 && ok; i++)
+            ok = frames[i] == nullptr;
+    }
+    if (!ok)
+    {
+        if (!g_reuseBroken.exchange(true))
+            Log("xma: codec reuse off: this FFmpeg's XMA context isn't laid out as expected (private size %zu)", size);
+        return;
+    }
+    std::vector<uint8_t> bytes(static_cast<const uint8_t*>(av->priv_data), static_cast<const uint8_t*>(av->priv_data) + size);
+    static std::atomic<bool> logged{ false };
+    if (!logged.exchange(true))
+        Log("xma: codec reuse on: retired codecs are reset in place (private context %zu KB)", size >> 10);
+    std::lock_guard lock(g_pristineMutex);
+    g_pristine[av] = std::move(bytes);
+}
+
+void FreeCodec(AVCodecContext* av)
+{
+    if (!av)
+        return;
+    {
+        std::lock_guard lock(g_pristineMutex);
+        g_pristine.erase(av);
+    }
+    avcodec_free_context(&av);
+}
+
+// A retired codec back to its just-opened state. False: free it instead.
+bool RecycleCodec(AVCodecContext* av)
+{
+    if (!XmaReuse() || g_reuseBroken)
+        return false;
+    const std::vector<uint8_t>* snapshot = nullptr;
+    {
+        std::lock_guard lock(g_pristineMutex);
+        if (auto it = g_pristine.find(av); it != g_pristine.end())
+            snapshot = &it->second; // (only the decoder thread erases entries)
+    }
+    if (!snapshot)
+        return false;
+    avcodec_flush_buffers(av);
+    // Only what decoding a one-stream codec writes: stream 0's context (an eighth of what is before the tail) and the
+    // tail. (Copying the whole context was ~70% of FM4's decoder thread.)
+    const size_t size = snapshot->size(), stream = (size - kXmaTail) / 8;
+    auto* priv = static_cast<uint8_t*>(av->priv_data);
+    memcpy(priv, snapshot->data(), stream);
+    memcpy(priv + size - kXmaTail, snapshot->data() + size - kXmaTail, kXmaTail);
+    AVFrame** frames = XmaFrames(av, size);
+    for (int i = 0; i < 8; i++)
+        if (frames[i])
+            av_frame_unref(frames[i]);
+    g_codecsRecycled++;
+    return true;
+}
+
 AVCodecContext* OpenCodec(uint32_t ch, uint32_t hz)
 {
     const AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_XMA2);
@@ -205,6 +309,8 @@ AVCodecContext* OpenCodec(uint32_t ch, uint32_t hz)
     av->extradata[0] = 1;
     if (avcodec_open2(av, codec, nullptr) < 0)
         avcodec_free_context(&av);
+    if (av)
+        SnapshotCodec(av);
     return av;
 }
 
@@ -305,7 +411,7 @@ void RetireCodec(AVCodecContext* av)
     if (!av)
         return;
     if (NoCodecPool())
-        return avcodec_free_context(&av);
+        return FreeCodec(av);
     std::lock_guard lock(g_poolMutex);
     g_retiredCodecs.push_back(av);
 }
@@ -320,6 +426,31 @@ void RefillCodecPool()
     {
         std::lock_guard lock(g_poolMutex);
         retired.swap(g_retiredCodecs);
+    }
+    // PGR3_XMA_REUSE: retired codecs reset in place go back to their format's spares (up to MaxPooledCodecs); the rest
+    // are freed.
+    std::vector<AVCodecContext*> surplus;
+    if (XmaReuse())
+    {
+        std::vector<std::pair<std::pair<uint32_t, uint32_t>, AVCodecContext*>> recycled;
+        for (AVCodecContext*& av : retired)
+            if (av && RecycleCodec(av))
+            {
+                recycled.push_back({ { uint32_t(av->ch_layout.nb_channels), uint32_t(av->sample_rate) }, av });
+                av = nullptr;
+            }
+        std::lock_guard lock(g_poolMutex);
+        for (const auto& [key, av] : recycled)
+        {
+            auto& pool = g_codecPool[key];
+            if (pool.size() < MaxPooledCodecs())
+                pool.push_back(av);
+            else
+                surplus.push_back(av);
+        }
+    }
+    {
+        std::lock_guard lock(g_poolMutex);
         for (const auto& [key, pool] : g_codecPool)
         {
             size_t& target = g_codecTarget[key];
@@ -335,7 +466,9 @@ void RefillCodecPool()
         g_codecsWanted.clear();
     }
     for (AVCodecContext* av : retired)
-        avcodec_free_context(&av);
+        FreeCodec(av);
+    for (AVCodecContext* av : surplus)
+        FreeCodec(av);
     for (const auto& key : wanted)
         if (AVCodecContext* av = OpenCodec(key.first, key.second))
         {

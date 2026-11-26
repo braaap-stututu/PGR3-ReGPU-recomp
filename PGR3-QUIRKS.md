@@ -48,7 +48,7 @@ PGR4/FM3 runtime, and 22 `Vd*` calls are handled inside ReGPU. The rest:
 | A1 | No FMOD: XACT `.xwb` wave banks loaded by the game's own `WaveBank::Load`, played through XAUD (XAudio render driver) | strings, disc | seen |
 | A2 | XMA context lock register `0x7FEA1818` must rotate through context IDs or the game resets the hardware | PGR4 `xma_lock.cpp` | unknown; may not apply if K1's kernel API is used |
 | A3 | XMA contexts may hold physical addresses (PGR4) or virtual (FM2) | PGR4/FM2 | unknown |
-| A4 | Music: WMA through XMP (`Cannot create XMP source voice`); capture callback wants big-endian interleaved float | PGR4 `xmp.cpp` | expected |
+| A4 | Music: WMA through XMP (`Cannot create XMP source voice`); capture callback wants big-endian interleaved float | PGR4 `xmp.cpp` | **fixed** (session 6): `src/audio/xmp.cpp` (own player: FFmpeg avformat/wmav2/mp3 -> 48 kHz, 256-frame BE float blocks to the game's callback); PGR3 sends its requests three ways: XMsgInProcessCall, **XMsgStartIORequest** (playlists) and **XMsgSystemProcessCall** (play: was an unimplemented import). Countdown "now playing" panel back. `PGR3_NO_XMP`, `PGR3_TRACE_XMP` |
 
 ## Rendering
 
@@ -59,11 +59,12 @@ PGR4/FM3 runtime, and 22 `Vd*` calls are handled inside ReGPU. The rest:
 | R0c | Sky blown out white: the adaptive tone map reacting to the black buildings | session 2 | **fixed** with R0b |
 | R1 | Predicated tiling: debug modes `1280x720 2xMSAA 2 Tiles H/V`, `4xMSAA 4 Tiles`; check the real render size against the "1138x640" reports | strings | seen (strings) |
 | R2 | Per-tile bytes per pixel with HDR formats (PGR4: bottom third black) | PGR4 | expected |
-| R3 | Occlusion queries drive light/sun flares (ZPass vs Total must differ) | PGR4, FM3 | expected |
+| R3 | Occlusion queries drive light/sun flares (ZPass vs Total must differ). **PGR3's D3D marks a query's end in the four A counters only** (0xFFFFFEED; B stays 0): ReGPU wanted A and B, so no query ever ended (no answers; triple/stereo replays skipped everything after the first query) | PGR4, FM3; session 7 | **fixed** (ReGPU-V gpu.cpp, D3D12 `regpu-zpd-a-counters-end`); sun glare against the console not yet checked |
 | R4 | Fences: the game reuses vertex/index buffers once a fence passes; early fences tear geometry → "truthful fences" + skip Present's block | PGR4 `present_wait.cpp` | expected |
 | R5 | Runtime shader compile via the linked D3DX9 HLSL compiler (`GAME:\DontShip\Shaders\`); a static microcode scan may miss shaders | strings | unknown |
-| R6 | Resolve aliasing and CPU write-backs (reflections, mirrors, photo mode, garage pictures) | FM3, PGR4 | expected |
+| R6 | Resolve aliasing and CPU write-backs (reflections, mirrors, photo mode, garage pictures) | FM3, PGR4 | road strips, car pictures, liveries: fixed (sessions 2-11); **photo mode fixed (session 6)**: 1280x720 8888 resolves in race frames written back (gpu_host.cpp) |
 | R7 | Motion blur weighted by alpha; `2_10_10_10` front buffer | PGR4 | expected |
+| R8 | **The scene is drawn from the race camera object** (0x828B3840: matrix +0x50, FOV +0x40), not from the view hand-off (sub_82157EF8), whose matrices only reach culling, LOD and motion blur; the projection is reversed and infinite (z = 0.05, depth = near / w); the HUD is drawn over the tone-map composite (a7484f3b4c5ba1e1) | session 7 | used by triple screen and VR (src/hooks/vr_camera.cpp) |
 
 ## Game logic and timing
 

@@ -90,7 +90,8 @@ bool ExperimentWriteback(const regpu::ResolveCopy& c)
 {
     static std::mutex m;
     static std::string text;
-    static std::set<std::pair<uint32_t, uint32_t>> sizes, logged;
+    static std::set<std::pair<uint32_t, uint32_t>> sizes;
+    static std::set<std::pair<uint64_t, uint32_t>> logged; // (size, address): each new destination logged once
     // (Asked at every resolve: the variable is read 4 times a second, and nothing is locked while it is unset.)
     static std::atomic<int64_t> nextRead{ 0 };
     static std::atomic<bool> any{ false };
@@ -135,7 +136,7 @@ bool ExperimentWriteback(const regpu::ResolveCopy& c)
     }
     if (!sizes.count({ c.width, c.height }))
         return false;
-    if (logged.insert({ c.width, c.height }).second)
+    if (logged.insert({ uint64_t(c.width) << 32 | c.height, c.base }).second)
         Log("writeback experiment: %ux%u format %u at %08X rows %d-%d written back", c.width, c.height, c.format, c.base, c.top, c.bottom);
     return true;
 }
@@ -524,11 +525,14 @@ void GpuStart()
     }
     else if (const std::string vr = GetSettings().Extra("vr"); !vr.empty() && vr != "off" && vr != "0")
         DefaultEnv("REGPU_VR", vr.c_str());
-    // vr=stereo (session 38): ReGPU draws the main view a second time for the other eye. FM3 draws its scene turned
-    // 180 degrees (the resolved scene image is upside down and mirrored; the final composite turns it back), so camera
-    // +x lands at clip -x: the eye offsets are swapped (measured on the grid: unswapped, near objects moved right from
-    // the left eye's picture to the right eye's; PGR3_VR_FAKE head moves were the right way round).
-    DefaultEnv("REGPU_VR_EYE_FLIP", "1");
+    // vr=stereo: ReGPU draws the main view a second time for the other eye. (FM3 needed REGPU_VR_EYE_FLIP=1: it draws its
+    // scene turned 180 degrees. PGR3 doesn't: its projection keeps camera +x at clip +x, session 7.)
+    // Stereo: the second eye's replay starts at the scene, after the shadow maps and the car's cube map (drawn once for
+    // both eyes; ReGPU REGPU_TRIPLE_SHARE_PASSES, measured for triple screen: +20%).
+    if (const char* v = getenv("REGPU_VR"); v && strcmp(v, "stereo") == 0)
+        DefaultEnv("REGPU_TRIPLE_SHARE_PASSES", "1");
+    // (PGR3's in-car camera hardly moves against the car, within about 1 degree: session 7, measured in an AI race;
+    // FM3's CameraPhysics.xml route below doesn't apply to PGR3.)
     // In-car camera motion (shake, G lean) is off with VR (src/kernel/imports_io.cpp); vr_camera_motion=1 keeps it.
     if (GetSettings().Extra("vr_camera_motion") == "1")
         DefaultEnv("PGR3_VR_CAMERA_MOTION", "1");
@@ -542,8 +546,7 @@ void GpuStart()
     // Triple screen (session 39, ReGPU REGPU_TRIPLE; src/hooks/vr_camera.cpp TripleHandOff): settings.ini triple=1 (or
     // PGR3_TRIPLE=1); the resolution is the three screens together (e.g. 7680x1440); triple_fov (each screen's vertical
     // field of view, degrees; 0 = the camera's own where it fits), triple_angle (degrees between the screens' axes; 0 =
-    // edge to edge), triple_bezel (degrees for the bezels). Not together with VR. FM3 draws its scene turned 180 degrees,
-    // so the turn is flipped in clip space (as the VR eye offset).
+    // edge to edge), triple_bezel (degrees for the bezels). Not together with VR. The hand-off: src/hooks/vr_camera.cpp.
     {
         const char* t = getenv("PGR3_TRIPLE");
         const std::string triple = t ? t : GetSettings().Extra("triple");
@@ -551,7 +554,16 @@ void GpuStart()
         if (triple == "1" && !(vrNow && *vrNow && strcmp(vrNow, "off") != 0 && strcmp(vrNow, "0") != 0))
         {
             DefaultEnv("REGPU_TRIPLE", "1");
-            DefaultEnv("REGPU_TRIPLE_FLIP", "1");
+            // PGR3's projection is reversed and infinite (z_clip = near, depth = near / w; session 7): each screen's
+            // depth is exact with z left as it is (ReGPU-V hlsl.cpp; FM3's z += w' - w would break the depth test).
+            // Not mirrored, so no REGPU_TRIPLE_FLIP (FM3's).
+            DefaultEnv("REGPU_TRIPLE_DEPTH", "keep");
+            // The HUD on the centre screen only: PGR3 draws its HUD over the tone-map composite (pixel shader
+            // a7484f3b4c5ba1e1) before the front-buffer resolve; the side screens skip the draws after it (ReGPU-V).
+            DefaultEnv("REGPU_HUD_OVER", "a7484f3b4c5ba1e1");
+            // PGR3 clears its frame before the shadow maps and the car's cube map: the side screens' replays start at
+            // the scene instead, so those are drawn once for all three (ReGPU-V REGPU_TRIPLE_SHARE_PASSES).
+            DefaultEnv("REGPU_TRIPLE_SHARE_PASSES", "1");
             // settings.ini triple_<key> -> PGR3_TRIPLE_<KEY> (src/hooks/triple_screen.cpp): the auto layout's fov, angle,
             // bezel (degrees), the physical layout's mode=physical, diag (inches), dist (cm), bezel_mm, gap_mm,
             // angle_left, angle_right (degrees; 0 = facing the eye).
@@ -636,6 +648,32 @@ void GpuStart()
         // Written back Deferred (in memory before the next fence, no stall); ReGPU adds each strip/region drawn into
         // a written-back image as its own deferred rectangle. PGR3_NO_LIVERY_WRITEBACK=1: not written (A/B);
         // PGR3_LIVERY_WRITEBACK_NOW=1: written at once (stalls ~55 ms per 2048 image).
+        // Photo mode (session 6, Steam Deck): TAKE renders the photo at 1280x720 and resolves it (8888, at e.g. 0E988000,
+        // not the front buffer 01411000); SAVE then JPEG-encodes that memory on the CPU (SAVE:\<date>.jpg, shown in Gotham
+        // TV > Your saved photos). Kept on the GPU, the saved JPG held whatever the memory had before (the ESRB notice
+        // screen). Written back at once. The count is logged every 30 s to see that it stays rare outside photo mode.
+        // PGR3_NO_PHOTO_WRITEBACK=1: not written back (A/B).
+        // Only in race frames (the last front buffer resolve, to 01411000, was 1024 wide: races draw 1024x600; the menus'
+        // 1280x720 frames resolve 1280x720 8888 images to 0DEC0000/0E258000 every frame, ~27 a second, and must not stall).
+        static std::atomic<uint32_t> frontWidth{ 0 };
+        if (c.base == 0x01411000 && !c.depth)
+            frontWidth = c.width;
+        static LiveSwitch noPhoto("PGR3_NO_PHOTO_WRITEBACK");
+        if (!noPhoto && !c.depth && c.format == 6 && c.top == 0 && c.width == 1280 && c.height == 720 && c.base != 0x01411000 &&
+            frontWidth.load() == 1024)
+        {
+            w.mode = regpu::Writeback::Mode::Now;
+            static std::atomic<uint32_t> count{ 0 };
+            static std::atomic<int64_t> lastLog{ 0 };
+            const uint32_t n = ++count;
+            const int64_t now = int64_t(GetTickCount64());
+            if (n == 1 || now - lastLog.load() > 30000)
+            {
+                lastLog = now;
+                Log("photo writeback: %08X 1280x720 (%u so far)", c.base, n);
+            }
+            return w;
+        }
         static LiveSwitch noLivery("PGR3_NO_LIVERY_WRITEBACK");
         static LiveSwitch liveryNow("PGR3_LIVERY_WRITEBACK_NOW");
         if (!noLivery && !c.depth && c.format == 6 && c.top == 0 &&

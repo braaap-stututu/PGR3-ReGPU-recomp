@@ -16,6 +16,13 @@ x64, built on [ReXenon](https://github.com/zer0ducksgiven/ReXenon) (the recompil
   at 1440p, with the upscalers, anti-aliasing filters and ultrawide working in races.
 - The console's 30 fps lock is removed: an AI-driven benchmark race runs at ~350 fps uncapped at native 1440p with 4x
   MSAA on an RX 7900 XTX (29.7 fps locked), 1% low ~200 fps, no stutters over 16.7 ms during the race.
+- Runs on the Steam Deck (Vulkan ReGPU; `tools/deck/README.md`).
+- Telemetry out (settings.ini `telemetry=127.0.0.1:5300`): the player's car in Forza's "Data Out" UDP layout
+  (motion, engine, gear, inputs, wheels, suspension, lap, position, lap times), for SimHub, motion rigs and dash apps.
+- True triple screen (settings.ini `triple=1`, resolution = the three screens together, e.g. 7680x1440): each side
+  screen drawn with its own turned view, HUD on the centre screen. Checked on the Deck's Vulkan build.
+- VR (experimental, not yet tried in a headset; needs thirdparty/openxr): settings.ini `vr=screen|cockpit|stereo`;
+  cockpit head tracking checked with a simulated head pose.
 - Still to do: the rest of the race against the console, a few system calls, intro skip, DLC, saves.
 
 ## Layout

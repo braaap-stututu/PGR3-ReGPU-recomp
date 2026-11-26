@@ -1,5 +1,5 @@
 #pragma once
 
-// VR head tracking in the cockpit (session 37, src/hooks/vr_camera.cpp). Called once per main-loop frame
-// (src/hooks/frame_time.cpp): hands the frame's head pose (or none) to ReGPU, in frame order.
+// PGR3's view hand-off hook (sub_82157EF8; src/hooks/vr_camera.cpp): triple screen and (not working yet) VR head
+// tracking. VrCameraMainFrame is FM3's per-frame entry, unused in PGR3 (the hand-off submits the frame's pose).
 void VrCameraMainFrame();

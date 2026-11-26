@@ -13,6 +13,7 @@
 #include <string>
 
 #include "hooks/grid_test.h"
+#include "hooks/telemetry.h"
 #include "kernel/imports.h"
 #include "log.h"
 
@@ -40,6 +41,7 @@ PPC_FUNC(sub_82178CB8)
         Log("ai player: building car %08X: index %u type %u entry %08X: %s", car, index, type, entry, hex.c_str());
     }
     GridTestCarBuilt(index, type);
+    TelemetryCarBuilt(car, index, type);
     // PGR3_AI_PLAYER=1: the player's car (type 0) is built as an opponent's (type 1), so the race AI drives it for the
     // whole race while the HUD, chase camera, position and results still follow it (checked in session 3: 1st at
     // 119 mph on lap 1). PGR3_AI_PLAYER_TYPE=<from>:<to> (testing) builds a car of type <from> as type <to>.

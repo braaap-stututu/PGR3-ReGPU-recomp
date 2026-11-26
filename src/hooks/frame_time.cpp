@@ -20,6 +20,7 @@
 
 #include "hooks/frame_time.h"
 #include "hooks/grid_test.h"
+#include "hooks/telemetry.h"
 #include "kernel/imports.h"
 #include "live_switch.h"
 #include "log.h"
@@ -112,6 +113,7 @@ PPC_FUNC(sub_82299690)
 {
     __imp__sub_82299690(ctx, base);
     GridTestWorldFrame(FrameTimeGameClock());
+    TelemetryWorldFrame(FrameTimeGameClock());
 }
 
 // Lua RaceStarted (GO).
@@ -121,4 +123,5 @@ PPC_FUNC(sub_823595F8)
     __imp__sub_823595F8(ctx, base);
     Log("frame time: race started (GO) at game time %.3f s", FrameTimeGameClock());
     GridTestGo(FrameTimeGameClock());
+    TelemetryGo(FrameTimeGameClock());
 }

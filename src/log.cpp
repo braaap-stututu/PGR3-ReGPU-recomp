@@ -90,6 +90,10 @@ void Write(const char* prefix, const char* fmt, va_list args)
 }
 }
 
+// The Vulkan ReGPU calls LogStart once Config::userDir is final (its own regpu.log); PGR3 keeps its own log (out/run/pgr3.log),
+// open from the start, so there is nothing to do. Defining it keeps ReGPU's log.cpp out of the link (as the FM3 port does).
+void LogStart() {}
+
 void LogFlush()
 {
     std::unique_lock lock(g_logMutex);

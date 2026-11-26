@@ -1,0 +1,61 @@
+diff --git a/src/gpu/gpu.cpp b/src/gpu/gpu.cpp
+index eecef17..e1095cf 100644
+--- a/src/gpu/gpu.cpp
++++ b/src/gpu/gpu.cpp
+@@ -743,11 +743,55 @@ void OnShader(uint32_t type, uint32_t address, const uint32_t* code, uint32_t dw
+     g_shaderAddress[type] = address;
+ }
+ 
++// REGPU_TRIPLE_SHARE_PASSES=1 (PGR3 session 7): a title whose first full-width draw comes before its shadow maps and
++// reflections (PGR3 clears the frame first) would draw those again for each side screen / eye. With this the recording
++// starts again at the first full-width draw after a narrower pass, until REGPU_TRIPLE_SHARE_LOCK (default 64)
++// full-width draws in a row have been recorded (the main view: later narrow passes, bloom and the like, belong to it).
++bool g_shareLocked = false, g_shareSawNarrow = false;
++uint32_t g_shareWide = 0;
++void ShareRestart()
++{
++    static const bool on = [] {
++        const char* v = getenv("REGPU_TRIPLE_SHARE_PASSES");
++        return v && *v && strcmp(v, "0") != 0;
++    }();
++    static const uint32_t lock = [] {
++        const char* v = getenv("REGPU_TRIPLE_SHARE_LOCK");
++        return v && *v ? uint32_t(atoi(v)) : 64u;
++    }();
++    if (!on || !g_armed || g_shareLocked)
++        return;
++    if (!RendererMainViewNow())
++    {
++        g_shareSawNarrow = true;
++        g_shareWide = 0;
++        return;
++    }
++    if (g_shareSawNarrow)
++    {
++        // Start again here: the state as at this draw (its record is appended again by the caller).
++        g_shareSawNarrow = false;
++        g_startFile = work::g_file;
++        for (int t = 0; t < 2; t++)
++            g_startShader[t] = g_shader[t], g_startShaderAddress[t] = g_shaderAddress[t];
++        g_log.clear();
++    }
++    if (++g_shareWide >= lock)
++        g_shareLocked = true;
++}
++
+ // Before a draw record runs: the frame's first main-view draw starts the recording.
+ void BeforeDraw()
+ {
+-    if (!Mode() || g_checked || !RendererMainViewNow())
++    if (g_checked)
++    {
++        ShareRestart();
++        return;
++    }
++    if (!Mode() || !RendererMainViewNow())
+         return;
++    g_shareLocked = g_shareSawNarrow = false;
++    g_shareWide = 1;
+     g_checked = true;
+     if (TripleMode())
+     {

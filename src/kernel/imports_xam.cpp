@@ -324,6 +324,17 @@ GUEST_EXPORT(XNotifyGetNext)
     Return(ctx, 0);
 }
 
+// A notification to every listener whose areas include its area (bits 25-30 of the id, as Xenia's XNotify):
+// the media player's XN_XMP_STATECHANGED (0x0A000001, area 5) from src/audio/xmp.cpp.
+void BroadcastNotification(uint32_t id, uint32_t param)
+{
+    const uint64_t area = 1ull << ((id >> 25) & 0x3F);
+    std::lock_guard lock(g_listenerMutex);
+    for (auto& weak : g_listeners)
+        if (auto listener = weak.lock(); listener && (listener->mask & area))
+            listener->queue.push_back({ id, param });
+}
+
 // System UI: answered at once ------------------------------------------------------
 
 namespace
@@ -1210,6 +1221,8 @@ GUEST_EXPORT(XamTaskCloseHandle) { CloseHandle(ctx.r3.u32); Return(ctx, X_STATUS
 // XMsg to system apps. 0xFA is XMP, the music player: report it idle
 // (no custom soundtrack) at full volume. Arguments arrive as a struct of
 // big-endian dwords at r5.
+uint32_t XmpMessage(uint32_t message, uint32_t args, uint32_t length); // audio/xmp.cpp
+
 GUEST_EXPORT(XMsgInProcessCall)
 {
     const uint32_t app = ctx.r3.u32, message = ctx.r4.u32, args = ctx.r5.u32;
@@ -1225,6 +1238,13 @@ GUEST_EXPORT(XMsgInProcessCall)
     {
         LOG_ONCE("XMsgInProcessCall to app %X (message %08X) not supported", app, message);
         Return(ctx, 0x80004005); // E_FAIL
+        return;
+    }
+    // The media player (src/audio/xmp.cpp): the title's music playlists, decoded and handed to its capture callback.
+    // PGR3_NO_XMP=1: the old answers below (status idle, success for the rest: no music).
+    if (static const bool noXmp = getenv("PGR3_NO_XMP") != nullptr; !noXmp)
+    {
+        Return(ctx, XmpMessage(message, args, ctx.r6.u32));
         return;
     }
     switch (message)
@@ -1253,8 +1273,34 @@ GUEST_EXPORT(XMsgInProcessCall)
     }
     Return(ctx, 0);
 }
-GUEST_EXPORT(XMsgStartIORequest) { FinishUi(ctx, ctx.r5.u32, X_ERROR_FUNCTION_FAILED); }
-GUEST_EXPORT(XMsgStartIORequestEx) { FinishUi(ctx, ctx.r5.u32, X_ERROR_FUNCTION_FAILED); }
+// (app, message, overlapped, buffer, length): the media player's requests (app 0xFA) go to src/audio/xmp.cpp, as the
+// in-process ones do, completed at once (PGR3 sends its playlist and play requests this way); everything else fails.
+void StartIoRequest(PPCContext& ctx)
+{
+    static const bool noXmp = getenv("PGR3_NO_XMP") != nullptr;
+    if (ctx.r3.u32 == 0xFA && !noXmp)
+    {
+        const uint32_t result = XmpMessage(ctx.r4.u32, ctx.r6.u32, ctx.r7.u32);
+        FinishUi(ctx, ctx.r5.u32, result == 0 ? X_ERROR_SUCCESS : X_ERROR_FUNCTION_FAILED);
+        return;
+    }
+    FinishUi(ctx, ctx.r5.u32, X_ERROR_FUNCTION_FAILED);
+}
+GUEST_EXPORT(XMsgStartIORequest) { StartIoRequest(ctx); }
+// (app, message, buffer, length): as XMsgInProcessCall. PGR3 sends media player requests this way too (it was an
+// unimplemented import: lr 82459924, right after the game made its playlists).
+GUEST_EXPORT(XMsgSystemProcessCall)
+{
+    static const bool noXmp = getenv("PGR3_NO_XMP") != nullptr;
+    if (ctx.r3.u32 == 0xFA && !noXmp)
+    {
+        Return(ctx, XmpMessage(ctx.r4.u32, ctx.r5.u32, ctx.r6.u32));
+        return;
+    }
+    LOG_ONCE("XMsgSystemProcessCall to app %X (message %08X) not supported", ctx.r3.u32, ctx.r4.u32);
+    Return(ctx, 0x80004005);
+}
+GUEST_EXPORT(XMsgStartIORequestEx) { StartIoRequest(ctx); }
 GUEST_EXPORT(XMsgCancelIORequest) { Return(ctx, X_ERROR_SUCCESS); }
 GUEST_EXPORT(XamSessionCreateHandle) { StoreIfNonNull(ctx.r3.u32, CreateHandle(std::make_shared<EnumeratorObject>())); Return(ctx, X_ERROR_SUCCESS); }
 GUEST_EXPORT(XamSessionRefObjByHandle) { StoreIfNonNull(ctx.r4.u32, 0); Return(ctx, X_ERROR_FUNCTION_FAILED); }

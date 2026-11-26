@@ -1,0 +1,10 @@
+8fb74d8 PGR3 session 7: occlusion queries end on the A counters, triple-screen shared passes, keep depth, HUD over
+a52f6f7 Direct SPIR-V: acyclic programs with backward jumps run their blocks once in topological order
+ab62f93 Texture copies into the upload ring on 3 helper threads (REGPU_SYNC_TEXTURE_COPIES=1: on the draw thread)
+caaa1ab REGPU_DUMP_SPV=<shader hash>: a shader's direct SPIR-V (base and variants) to files, the HLSL path's cache key logged
+2cf708c REGPU_FRAME_ROOM_HEIGHT: EDRAM surfaces tall enough for the title's smallest guest frame from the start
+d18edb7 Passes on surfaces up to one EDRAM tile wide (80 px) drawn at 1:1
+ae157df Control flow: a jump target in the second half of the end's CF pair is parsed on to its own end
+2a42dd9 Merge origin/main (REGPU_NO_GPU_WORK, docs) into pgr3vk
+0d86ba5 Docs: FM4 and FM3 on the Vulkan ReGPU, research reports, RGP and sensor tools
+478adb8 Measuring switch REGPU_NO_GPU_WORK; draws per screen in triple mode

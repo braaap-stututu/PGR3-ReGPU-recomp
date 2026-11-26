@@ -1,0 +1,21 @@
+#!/bin/sh
+# fxc on Linux (Deck cross-builds): runs fxc_shim.exe + d3dcompiler_47.dll (build/redist) through Proton's Wine.
+# Paths are passed as Z:\ paths. Prefix: $PGR3_FXC_PREFIX (default ~/.local/share/pgr3-regpu/fxc-prefix).
+HERE="$(dirname "$(readlink -f "$0")")"
+ROOT="$(cd "$HERE/../../.." && pwd)"
+WINE="${WINE:-$HOME/.steam/steam/steamapps/common/Proton 11.0/files/bin/wine}"
+export WINEPREFIX="${PGR3_FXC_PREFIX:-$HOME/.local/share/pgr3-regpu/fxc-prefix}" WINEDEBUG=-all
+mkdir -p "$WINEPREFIX"
+export WINEDLLPATH="$ROOT/build/redist"
+for a in "$@"; do
+  case "$a" in /*/*) a="Z:$(printf '%s' "$a" | tr '/' '\\')";; esac
+  set -- "$@" "$a"; shift
+done
+[ -f "$HERE/d3dcompiler_47.dll" ] || cp "$ROOT/build/redist/d3dcompiler_47.dll" "$HERE/"
+# One compile at a time (parallel ninja jobs would start Wine side by side).
+exec 9>"$WINEPREFIX/.fxc.lock"; flock 9
+# Proton's Wine needs SteamOS's libraries: from inside the distrobox, run it on the host.
+if [ -e /run/.containerenv ] && command -v distrobox-host-exec >/dev/null; then
+  exec distrobox-host-exec env WINEPREFIX="$WINEPREFIX" WINEDEBUG=-all "$WINE" "$HERE/fxc_shim.exe" "$@"
+fi
+exec "$WINE" "$HERE/fxc_shim.exe" "$@"

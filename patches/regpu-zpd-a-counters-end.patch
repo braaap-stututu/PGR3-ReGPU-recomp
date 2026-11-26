@@ -1,0 +1,20 @@
+diff --git a/src/gpu/gpu.cpp b/src/gpu/gpu.cpp
+index 7d7502e..eecef17 100644
+--- a/src/gpu/gpu.cpp
++++ b/src/gpu/gpu.cpp
+@@ -1466,7 +1466,14 @@ uint32_t ExecutePacket(uint32_t ptr)
+         auto* c = GuestPtr<uint32_t>(counts);
+         const uint32_t finished = __builtin_bswap32(0xFFFFFEED);
+         // Layout (little-endian dwords): Total A/B, ZFail A/B, ZPass A/B, StencilFail A/B.
+-        const bool end = (c[4] == finished && c[5] == finished) || (c[2] == finished && c[3] == finished);
++        // PGR3's D3D marks only the A counters (Total/ZFail/ZPass/StencilFail A = 0xFFFFFEED, the B ones 0; PGR3 session
++        // 7): taken as an end too. Before, PGR3's queries never ended: the game was never answered (no sun glare change
++        // with REGPU_ZPD_SCALE), and the triple-screen / stereo replays skipped every draw after the frame's first
++        // query (the post-processing and the front-buffer resolve: the side screens showed the centre picture).
++        // REGPU_ZPD_STRICT_END=1: both A and B needed, as before (A/B).
++        static LiveSwitch strictEnd("REGPU_ZPD_STRICT_END");
++        const bool end = (c[4] == finished && c[5] == finished) || (c[2] == finished && c[3] == finished) ||
++                         (!strictEnd && c[0] == finished && c[2] == finished && c[4] == finished && c[6] == finished);
+         static int logged = 0;
+         static LiveSwitch traceZpd("REGPU_TRACE_ZPD"); // (a getenv per query was ~1% of the command processor)
+         if (!traceZpd)

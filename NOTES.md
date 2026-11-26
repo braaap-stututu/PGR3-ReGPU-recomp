@@ -1,6 +1,266 @@
 # PGR3 ReGPU: notes
 
-## Start here (session 6)
+## Start here (session 7)
+
+**Session 7 (2026-11-25, 22:00-00:50): the user asked for an error check, a deep dive for physics/handling telemetry,
+and whether VR and true triple screen can work as in FM3; then "keep working on it" for two hours.**
+- **Next (the user decides):** (1) the user checks the sun glare in play facing the sun (`switch REGPU_ZPD_STRICT_END
+  1/0`); (2) a headset test: vr=cockpit, then vr=stereo; (3) commits (nothing committed: PGR3 repo, ReGPU-V pgr3vk
+  working tree, D3D12 patches 103-106); (4) launcher tabs for telemetry / triple / VR (PGR3's launcher has none;
+  settings.ini keys work, the launcher keeps unknown keys); (5) the bright right-edge columns (triple seams).
+- **Errors:** a 180 s AI race log (Vulkan) is clean: 0 XMA decode errors; only the known one-off boot imports
+  (MmQueryStatistics, VdGetGraphicsAsicID, VdInitializeEDRAM, XNotifyPositionUI, Refresh,
+  XamUserCreateAchievementEnumerator, kernel ordinal 1BF, XConfig 0003/0001). All tools/deck scripts pass `bash -n`.
+- **Occlusion queries never ended in PGR3 (fixed, ReGPU-V gpu.cpp + D3D12 patch `regpu-zpd-a-counters-end`):** PGR3's
+  D3D marks a query's end in the four A counters only (0xFFFFFEED; B stays 0, `REGPU_TRACE_ZPD`); ReGPU wanted A and B.
+  Every query looked like a start: the game never got an answer (so `REGPU_ZPD_SCALE` "changed nothing", session 5),
+  and the triple/stereo replays skipped every draw after the frame's first query. **Side effect to check in play:**
+  the sun glare / flares now get real visibility answers (with FM3's inherited `REGPU_ZPD_SCALE=0.6`); not yet looked
+  at against the console. Frozen-grid picture unchanged (mean diff 0.71/255 vs before); in a moving race nothing odd
+  (no giant glare); no sun found on the frozen grid even looking round the sky with the VR fake pose (the glare is
+  probably in the HDR composite, off while frozen): **A/B it facing the sun in live play** with `switch
+  REGPU_ZPD_STRICT_END 1/0`. `REGPU_ZPD_STRICT_END=1` = the old behaviour.
+- **Telemetry: done (src/hooks/telemetry.cpp).** settings.ini `telemetry=127.0.0.1:5300` (or `PGR3_TELEMETRY`),
+  `telemetry_format=fm7|fh` (311 / 324 bytes), `telemetry_hz` (60). Forza "Data Out" layout (SimHub, motion rigs, dash
+  apps). Checked with a UDP listener: 59.4 packets/s; motion, rpm, gear, inputs, wheels, suspension as expected; over a
+  full 3-lap AI race: lap 0 -> 1 -> 2 -> 3, lap times 62.70 / 60.88 / 63.80 (best 60.88), position 6th -> 1st (and
+  4th after a crash on lap 3, back to 1st), race distance to 8476 m (3 x 2754 + grid). Layout (car object, race
+  object, per-car race blocks) in the file's header. Still 0: fuel, tyre temps, boost, power, torque, slip ratio.
+- **Camera (how the scene is drawn):** the race camera object 0x828B3840 (camera update `sub_822FBC58`, skipped while
+  the world is frozen/paused: +1208) holds the scene's camera matrix at +0x50 (rows right, up, forward, position) and
+  the FOV at +0x40 (from `Cameras|Game FOV` 0x828B3710); the render function `sub_8229A548` reads it (as 0x828B3830 +
+  16) into a stack view. The view hand-off `sub_82157EF8(view)` (renderer block 0x82545510..) is downstream: changes
+  there reach only culling, LOD and motion blur. Frame order: `env PGR3_CAMERA_TRACE 40` (debug server).
+- **Triple screen: working on both builds**, auto and physical layouts (physical 27"/70 cm/10 mm bezels:
+  out/shots/triple-physical.png, 47.6 deg side turns, 141.5 deg across); (Vulkan: out/shots/triple-v2.png; D3D12 with patches 103-106:
+  out/shots/triple-d3d12.png; its first triple boot compiles every vertex shader again, >10 min on the Deck). `PGR3_TRIPLE=1 PGR3_RESOLUTION=3840x720`
+  (settings.ini triple=1, the triple_* layout keys as in FM3). Pieces: FM3's geometry (src/hooks/triple_screen.cpp)
+  widening the race camera's own FOV (+0x40) after its update (any camera, replays too; first done through the Game
+  FOV variable, which only the chase and in-car cameras read); motion blur + DOF off in triple/VR (0x8259CC94 / 0x8259CCB4); ReGPU
+  `REGPU_TRIPLE_DEPTH=keep` (PGR3's reversed infinite projection), `REGPU_HUD_OVER=a7484f3b4c5ba1e1` (HUD on the centre
+  screen only: PGR3 draws it over the composite), `REGPU_TRIPLE_SHARE_PASSES=1` (shadows and the car's cube map drawn
+  once: 35 -> 42 fps at 3x720p on the Deck, 1979 draws per side screen). Seams continuous (out/shots/triple-hud.png).
+  AI race at 3x 1280x720 on the Deck (Vulkan, 45 s): 51.8 fps avg, no errors (out/shots/triple-race.png).
+  The thin light line at each seam is the frame's own right edge (the last 2 columns are brighter in the normal single
+  screen too: out/shots/single-grid.png); not fixed. Narrowed with `ps a7484f3b4c5ba1e1 <expr>` live edits: the
+  composite's scene fetch (slot 0) alone, its alpha, its UVs (0..1 exactly) and the vignette term are all clean at the
+  edge, and nothing after the composite adds it; it comes from the composite's full math (the blend of those
+  terms), cause not found: its own output (`ps ... float4(saturate(oC0.rgb), 1)`) already has it (46 vs 3 inside)
+  while a hand-made TFetch2D(0, input.o[0]) at the same pixels is clean and the alpha is flat: next, compare the
+  shader's own r5 after its first fetch (its predicated paths, `p`, run on the frozen grid too). FM3's REGPU_TRIPLE_FLIP / REGPU_VR_EYE_FLIP no longer set.
+- **VR: head tracking works without a headset (fake pose); not tried in a headset.** OpenXR now builds in when
+  thirdparty/openxr has include/ + bin/openxr_loader.dll (CMakeLists; set up on the Deck: headers linked from
+  ReGPU-V/work/downloads-deck/openxr-sdk, loader from the FM3 release). `vr=cockpit|stereo`: the head's pose goes into
+  the race camera's matrix after its update (vr_camera.cpp, a matrix not rebuilt since is restored first, so poses don't
+  pile up while frozen), the headset FOV into +0x40. Checked with `PGR3_VR=cockpit PGR3_VR_ANY_CAMERA=1
+  PGR3_VR_FAKE="30 0 0 0 0 0"` (turned left, FOV 108) and "0 20 15" (up, rolled): out/shots/vr-yaw30.png,
+  vr-pitchroll.png. Without a runtime the log says "the OpenXR runtime has no Vulkan support" and the game goes on.
+  In the race the cameras cycle with LB (in-car 0.76 m from the car's centre, two front views 1.51 / 1.68, chase 5.32 /
+  6.45): head tracking applies within 2.5 m; checked in the in-car view (out/shots/vrc-incar-yaw30.png). Open: stereo can't be drawn without a
+  headset (ReGPU needs poses); no HUD panel in stereo (REGPU_VR_HUD_UNDER is FM3's hash; PGR3's HUD is drawn over, so
+  it shows in both eyes at screen depth). PGR3's in-car camera hardly moves against the car (yaw/pitch/roll within
+  ~1 deg, sd ~0.1, measured over 30 s of AI race), so there is no shake or lean to switch off. vr=stereo also sets
+  REGPU_TRIPLE_SHARE_PASSES (the second eye replays from the scene; untested without a headset).
+- **ReGPU changes are uncommitted:** ReGPU-V (thirdparty/ReGPU-vk, branch pgr3vk): gpu.cpp (ZPD end, share passes,
+  REGPU_TRACE_TRIPLE), hlsl.cpp (triple depth), renderer.cpp (HUD over). D3D12: patches 103-106 in tools/setup.ps1 and
+  patches/README.md (`regpu-zpd-a-counters-end`, `regpu-triple-depth-keep`, `regpu-hud-over`,
+  `regpu-triple-share-passes`); the D3D12 build compiles and its normal grid picture is unchanged
+  (out/shots/d3d12-normal.png).
+
+**Session 6, night (2026-11-25, 20:30-): the user asked about headlights, the translucent car, and the 1%/0.1% lows.**
+- **Lows: XMA codec reuse (src/audio/xma.cpp, ported from the FM4/FM3 Deck work; same libavcodec 62.28.103).** Every
+  audio stream restart (engine sounds, ~200 a second in a race) freed one FFmpeg XMA codec and opened another (3.6 MB
+  private context, allocated and zeroed); retired codecs are now reset in place from a snapshot and go back to the pool.
+  AI race on the Deck (Vulkan, 2+2 interleaved): **avg 77.2/78.1 -> 83.9/85.5 fps, 1% low 40.3/40.8 -> 48.5/51.2, 0.1% low
+  26.5/31.4 -> 38.6/38.8, p99.9 29.7 -> 21-24 ms**, GPU 12.5 -> 11.5 ms (the CPU's heap work no longer takes the APU's
+  power from the GPU). 0 decode errors and 0 FFmpeg complaints over 63,540 packets; FM4 checked the method bit-exact. Not
+  listened to here: **listen to a race to confirm**. `PGR3_XMA_REUSE=0` = before. Both builds.
+- **The Deck preset now holds 60.0 fps** in the race (cap 60, 240 Hz vblank, with codec reuse; vsync off because the
+  screen was dark): 1% low 40-44, 0.1% low 32-34, ~1 frame over 2x the average per 40 s; the rest of the 1% low is frames
+  that just miss a 16.7 ms slot and take one more vblank.
+- Tried after that: CP idle sleep + `REGPU_HANDOFF_SPIN=0` uncapped (2+2): avg -0.7%, 0.1% low 34-35 -> 40-42, 1% low
+  mixed: not made default (capped, the CP already sleeps; hand-off spin alone at cap 60: within noise). Per-thread CPU
+  in the race (`tools/deck/threads.py`): the game's main thread 97% of a core (the limit now), draw thread 50%, command
+  processor 31%, wineserver 13%. `PGR3_SAMPLE_THREAD` crashes under Wine (its own sampling thread, thread.cpp:742):
+  use `PGR3_LONG_STACKS` instead.
+- **Translucent car:** it stays see-through while the car is parked with the camera close behind (44 s tested) and is
+  solid as soon as it drives. The game's near-camera car ghosting (`Car|Render|Ghost|Exterior min alpha distance`).
+- **Headlights (not fixed; the game keeps them off, no emulation fault found):** the projected headlight code is in the
+  shaders: `g_headlightEnabled` is bool[8] at b20 (pixel bools 148-155 = the night road shader's 8 projector branches,
+  fetching `g_headlightMap` = t15), with matrices in pc180+. In every draw those bools are 0 and t15 (64x64 8888 @0D642000)
+  is a constant dummy (FF 00 00 00); one projection matrix (pc184-186) is filled. The debug variable
+  `Car|Lights|Headlights|On` (object 826486B0 = {vtable, value}, registered by 824CFA88 with default 0) is 0; poking it
+  to 1 before the race (`PRE_RACE='C poke 826486B4 01000000' tools/deck/menus.sh race 3 1 x`) changes nothing (bools still
+  0): the game gates them elsewhere. Car models' own lamps glow. Need console night footage to know if beams are expected.
+
+**Session 6, evening (2026-11-25, 18:10-20:30): other cities and modes, Vulkan build. Nothing committed in the PGR3
+repo; ReGPU-V commits on the local pgr3vk branch (bundle out/deck-push/regpu-pgr3vk.bundle, refreshed).** The user asked to save the notes,
+work on the remaining issues and optimisation, then check the other modes/tracks. **Scripted menu routes beyond the
+grid test were used for this (the user's request: "check the other modes/tracks"; CLAUDE.md otherwise forbids them):**
+always on out/user-route restored from out/bench/baseline, never the user's profile. Helpers (scratchpad, worth moving
+to tools/deck if kept): boot to the main menu, then PLAYTIME > Play on this Xbox 360 > Street Race > city > route >
+options (LIGHTING left/right = day/night) > START > lobby (A opens "add opponent") > START RACE. Hold `trigger R` to drive.
+- **Checked, all render correctly (Vulkan, 720p):** Tokyo day + night (neon, lit windows, tail lights, dusk sky), Las
+  Vegas day, New York day, Nürburgring day, London night (street lamps, lit windows, Big Ben's clock face), the Playtime
+  menus, lobby, race results screen ("SAVE REPLAY"), music in every race with the panel. No shader translation
+  failures, no skipped draws in any of them.
+- Also checked on Vulkan: Las Vegas night (Luxor beam, neon), the user's desktop settings 1440p + 4x MSAA + CMAA 2 (grid
+  clean), FSR 1 and FSR 3 (3.1.6; switches off for one loading frame and back on). Texture write watch A/B in the race
+  (REGPU_TEXTURE_NO_WATCH, 2+2): no difference; kept. Long race frames left (~10 per 40 s) are draw-thread time
+  (WriteWatchArm/VirtualProtect, texture creation, a GPU wait), spread thin.
+- **Deck 60 fps cap now holds (59.2 fps):** `tools/deck/play.sh`'s Deck defaults add `PGR3_VBLANK_HZ=240` (4x the cap): at
+  the port's 2x (120 Hz) a frame that just misses its vblank waits 8.3 ms more. AI race at cap 60, 2+2: 56.1/57.4 ->
+  59.2/59.2 fps, frames over 16.7 ms 1228/1200 -> 1099/1085, p99 25.9/25.7 -> 24.7/25.1 ms. Deck only (session 4 on the
+  desktop measured 2x better at cap 60). Earlier "the governor lowers the clock" was only part of it.
+  **Not measured with vsync on:** from ~20:00 the Deck's display was off (DPMS Off), and a FIFO swap chain on a dark
+  screen presents at 1 Hz (benchmarks with PGR3_VSYNC=1 read 1.0 fps, GPU and draw thread idle: the environment, not
+  the game; at 17:01 with the screen on, vsync uncapped gave 62 fps). The vblank change doesn't depend on vsync, but
+  check `tools/deck/play.sh` with the screen on.
+- Tried, no gain, left off: `REGPU_SPIRV_FINITE_MUL=1` (only straight-line programs; race 2+2 within noise),
+  `REGPU_SPIRV_FETCH_BRANCHES=0` (per-shader times identical).
+- **Final race numbers on the Deck (AI benchmark, 1280x800, uncapped, interleaved):** Vulkan 77.5/76.4 fps, 1% low
+  39.0/34.8, 0.1% low 26.4/24.7; D3D12 76.7/76.7, 1% low 27.1/28.0, 0.1% low 18.2/19.6. Same average, Vulkan steadier.
+  (The session started at ~70 fps with a 1% low of ~19 on both.)
+- **Seen, the game's own:** a few seconds after GO, while the player's car hasn't moved, it turns translucent (a ghost)
+  and the picture goes flatter, until it drives off. The game has its own car ghosting (`Car|Render|Ghost|...`:
+  alpha by distance, "Display as ghost"), so this is very likely intended.
+- **Fixed: saved photos were wrong** (Photo Mode > TAKE > SAVE, viewed in Gotham TV > Your saved photos): the saved
+  JPG (`<user>\profiles\<profile>\content\00000001\profile.sav\<date>.jpg`) held a stale image (the ESRB notice screen),
+  because the game JPEG-encodes the photo on the CPU from a 1280x720 8888 resolve that ReGPU kept on the GPU. Rule in
+  src/gpu_host.cpp (resolveWriteback): 1280x720 8888 resolves not to the front buffer are written back **only in race
+  frames** (the last front-buffer resolve was 1024 wide), since the menus resolve such images ~27 times a second. Checked:
+  the JPG is the photo; the rule fired once (at TAKE), never in a 40 s benchmark race (74.4 fps, 1% low 35.7: unchanged).
+  `PGR3_NO_PHOTO_WRITEBACK=1` = before. Found with PGR3_WRITEBACK (its log now names each new address, not only each size).
+  After the fix the photo shows in Gotham TV's list preview and full screen, also after a restart (checked).
+- Also checked: Cone Capture (London, cones, timer HUD), the pause menu, Photo Mode (framing, photo view, save dialogs).
+- **Optimised (pgr3vk commit): direct SPIR-V for acyclic programs with backward jumps.** The slow shaders (vs DXC) took
+  the translator's loop over all blocks because PGR3's compiler jumps back into a shared tail from out-of-line
+  branches; RADV doesn't thread that loop. Blocks now run once in topological order when the jump graph is acyclic.
+  576b4098 1.18 -> 1.00 ms/frame, 7a049592 and 5e7e7f87 -15% (two small shaders +5-10%); AI race 2+2: GPU 13.05 ->
+  12.5-12.7 ms, 75.6 -> 76.9 fps; picture within boot noise; spirv-val clean. `REGPU_SPIRV_NO_DAG_ORDER=1` = before.
+- Also checked: replays (save from the results screen with X, Gotham TV > Your saved replays > play: TV cameras,
+  livery, crash overlay all right), Race Against the Clock (Tokyo, Aston Martin DB9, rolling start). Geometry Wars
+  (gw.xex) stays out of scope (NOTES "on disc").
+- **Unverified: night headlights.** No headlight pool on the road ahead at night. The game has projector lights
+  (`g_headlightMap/Direction/Enabled` in shaders; the night road shader a60b3ce6a7a5ceea has 9 projector branches on
+  bools 148-156 fetching t15), but those bools are 0 in every road draw mid-race, and t15 (8888 64x64 @0D642000) is bound
+  to ~all draws (a lookup table, not a headlight map). Needs night console footage before calling it a bug.
+
+**Session 6, later (2026-11-25 afternoon): PGR3 now runs on the Vulkan ReGPU (ReGPU-V), the default on the Deck.**
+The user: "keep fixing things ... when you run out of immediate issues swap out the DX12 regpu for the regpu-v vulkan
+one" (FM4 `deck`, ReGPU, FM3-ReGPU; newest branches).
+- **ReGPU-V:** `thirdparty/ReGPU-vk`, a clone of github.com/braaap-stututu/ReGPU on the **local branch `pgr3vk`**:
+  origin/fm4deck (d5a5a65: FM3 + FM4 Deck work) merged with origin/main (0d86ba5), plus three commits: the control-flow
+  end-pair target (= D3D12 patch 101), tiny passes at 1:1 (= 102) and REGPU_FRAME_ROOM_HEIGHT (= regpu-frame-room).
+  **Not pushed** (no GitHub login on the Deck): push `pgr3vk` from there, then it can become a submodule
+  (`git submodule add -b pgr3vk https://github.com/braaap-stututu/ReGPU thirdparty/ReGPU-vk`). Of the D3D12 stack's
+  102 patches 85 were already in ReGPU-V; not ported: pso-lock and dxc-tuning (D3D12-only) and ring-ahead
+  (D3D12 ring creation); texture-copy-threads was ported later the same day (below).
+- **To finish the swap on GitHub / the Windows PC:** `out/deck-push/regpu-pgr3vk.bundle` (the commits on top of
+  origin/fm4deck d5a5a65). In a ReGPU clone: `git fetch <bundle> pgr3vk:pgr3vk` then `git push origin pgr3vk`. After
+  that `tools/setup.ps1` clones thirdparty/ReGPU-vk (branch pgr3vk) when it is missing, and CMake builds it. Windows also
+  needs a DirectXShaderCompiler release in `thirdparty/dxc/bin/x64` (dxc.exe, dxcompiler.dll, dxil.dll with SPIR-V: a
+  junction to the FM3 port's `thirdparty/dxc` works); CMake then sets REGPU_DXC_EXE from it. A build folder configured
+  before keeps its cached PGR3_REGPU_DIR: re-configure with `-DPGR3_REGPU_DIR=<project>/thirdparty/ReGPU-vk`.
+- **Port side:** CMake `PGR3_REGPU_DIR` (default thirdparty/ReGPU-vk when present, else the D3D12 ReGPU); Vulkan:
+  FidelityFX `_vk` DLLs, `thirdparty/dxc/bin/x64` (dxcompiler + dxil with SPIR-V output; on the Deck a link to the FM3
+  Deck tree's) beside the exe, `PGR3_REGPU_VULKAN=1` for the source. `src/gpu_memory_log.cpp` uses
+  `regpu::GetGpuMemory`; `src/log.cpp` a no-op `LogStart` (else ReGPU-V's log.cpp is linked in: duplicate Log symbols).
+  Deck: `build/deckvk`, `tools/deck/play.sh` and `gridshot.sh` use it by default (`PGR3_VK=0`: the D3D12 build/deck).
+  Every `REGPU_*` default gpu_host.cpp sets exists in ReGPU-V.
+- **Checked on Vulkan:** boot, intro, menus, event select, loading, countdown, race grid, live race, pause menu, garage
+  walk-around: all render; trees/plates (the ported fix) right; vs the clip as close as the D3D12 build or closer.
+- **Speed on the Deck (720p, MSAA 1x, frozen grid, interleaved):** D3D12 (vkd3d-proton) 74-75 fps, GPU 12.7-12.8 ms;
+  Vulkan 70-71 fps, GPU 13.5-13.8 ms (draw thread ~95% both). Per shader (`REGPU_GPU_SHADERS=1`): the gap is mostly
+  four fetch-heavy blended shaders (5e7e7f87820d2491 0.22 -> 0.53 ms, fca3808b9c179973, 7a0495928b324ef4,
+  f4ea385cb1277dbb) that ReGPU-V's **direct SPIR-V translator** makes slower than DXC does (through DXC,
+  `REGPU_SPIRV_DIRECT=0`, they cost what D3D12's do) while the world shader 576b4098 is faster direct. All-DXC total
+  13.08 ms vs direct 13.44 (warm caches), but DXC's cold boot is many minutes on the Deck: direct kept. New switch
+  `REGPU_DUMP_SPV=<hash>` (pgr3vk commit) writes a shader's direct SPIR-V (base + variants) to <user>/shaders and logs
+  the HLSL path's cache key (its DXC SPIR-V: shadercache/<key>.vk1.spv). For 5e7e7f87820d2491: the register file is a
+  Function array indexed by constants only (no scratch); direct keeps values in local variables (DXC: SSA, phis); 33
+  samples direct vs 153 in DXC's unspecialised base. Next: pair the drawn variants and compare RADV's register counts.
+- **Music (QUIRKS A4) fixed:** `src/audio/xmp.cpp`, our own media player (FFmpeg avformat + wmav2/mp3 -> 48 kHz,
+  256-frame big-endian float blocks to the game's XMPCaptureOutput callback; layouts as Xenia/PGR4). PGR3 reaches the
+  player three ways: XMsgInProcessCall, **XMsgStartIORequest** (its playlists; was "function failed") and
+  **XMsgSystemProcessCall** (play; was an unimplemented import). Menu music, the race soundtrack (e.g. "No Limit" by
+  Daichi Miura) and the countdown/pause **"now playing" panel** as in the clip. Audio itself not heard (no listening
+  here): data flows at 938 blocks / 5 s (48 kHz), no starvation. `PGR3_NO_XMP=1` old behaviour, `PGR3_TRACE_XMP=1`.
+  PGR3 sets the player's volume to 0 at boot (XMPSetVolume) and takes the music with title render 1 (it plays it through
+  its own voice): the player volume is not applied to title-rendered capture (applied, every block was silent). Checked
+  by reading the capture blocks in a race: peaks 0.18-0.56, L/R correlation 0.79-1.00.
+- **Deck race stutter halved (both renderers):** `tools/deck/bench.sh` (the AI benchmark race, 1280x800, MSAA 1x,
+  uncapped) showed ~70 fps but a 1% low of ~19 fps, ~420 frames over 16.7 ms in 40 s, on Vulkan and D3D12 alike.
+  Long-frame main-thread samples (`PGR3_LONG_STACKS=30 PGR3_LONG_STACKS_THREAD="guest 1 "`): (1) **NtReadFile logged
+  every read over 4 MB with a symbolised host stack** (dbghelp, slow under Wine) on the reading thread: the race streams
+  London_sunny.stream2 in 5-8 MB chunks from the main thread; now only with `PGR3_TRACE_LARGE_READS=1`; (2) VfsResolve
+  checked `<user>\mods` on disk for every disc path (is_directory + listing, ~1 ms each under Wine): now read once a
+  run. A/B (the log switch, 2+2 interleaved): avg 69.5 -> 72.5 fps, **1% low 19 -> 33-37 fps**, p99 46 -> 23 ms.
+  Then (Vulkan) **texture copies on 3 helper threads** (pgr3vk commit, as the D3D12 stack's regpu-texture-copy-threads;
+  `REGPU_SYNC_TEXTURE_COPIES=1` = before), 2+2: 1% low 30-33 -> 35-36, 0.1% low 15-19 -> 23-25 fps, p99.9 43-47 -> 37 ms,
+  same picture. Left: ~10 long frames (26-36 ms) per 40 s.
+- **Deck presets:** a 60 fps cap doesn't hold in the race (56 fps): capped, the Deck's governor runs the GPU at ~920 MHz
+  against ~1105 uncapped (sensors during the run), and the frame no longer fits. Uncapped + vsync 62 fps. Lower
+  resolution barely helps (GPU time is per draw: 1024x640 12.9 ms vs 13.9). 1280x800 renders 1280x720 with bars (views
+  narrower than 16:9 aren't supported: Settings::RenderSize). (Fixed later: a 240 Hz guest vblank, below.)
+- **The remaining tone difference is the capture, not the game:** the clip's static loading-screen UI (no lighting or
+  exposure) shows the same levels curve as the race (ours 22 -> 13, 53 -> 48, 83 -> 84, 197 -> 211, 227 -> 240; black
+  4 -> 0): video levels (the 360's reference level vs the capture card), an affine stretch ~1.1x - 14. Race with that
+  curve applied: within +0.012..0.028 everywhere. Not to be "fixed" in the game. (Earlier "UI matches" was 2 points.)
+- **Garage:** after the capture curve, shadows and mids match the clip (p25 22 vs 20-26, p50 41 vs 36-44); highlights
+  hotter (p95 208 vs 97-134) but the clip moves the camera with motion blur and DOF and sees other walls: not
+  comparable without the same view; left open.
+
+**Session 6 (2026-11-25, on the Steam Deck; nothing committed or pushed):** the project was copied to the Deck
+(`/home/deck/claude projects/PGR3ReGPU`). The user gave a capture-card clip of the console (London, pause -> restart ->
+loading -> countdown -> GO; 12.5 s, 720p) and asked to make the build work on the Deck and fix the visual issues
+against it.
+- **Deck build works**: cross-built in the `regpu` distrobox (clang-cl + xwin), runs through Proton 11.0; how-to in
+  `tools/deck/README.md` (build/deck, `tools/deck/fxc` stand-in for fxc, `play.sh`, `gridshot.sh`, `make_patch.sh`).
+  The Windows exe from session 5 also runs under Proton as is.
+- **Fixed: every tree in London missing (trunks too) and black licence plates** (true on Windows too: session 5's
+  "grid matches the console" was before a reference with trees). New ReGPU patch **`regpu-cf-end-pair-target`**
+  (101st; README row has the whole hunt): a jump target in the second half of the CF pair holding the program's end
+  wasn't parsed on, so the tree shader's leaf branch stopped after its texture fetch with alpha 0 and alpha-to-mask
+  discarded every pixel. Stack check: `tools/deck/make_patch.sh -` prints no diff over 101 patches. **The user's fork
+  branch `pgr3` doesn't have it yet**, and setup.ps1's "all 100" text in this file is now 101.
+- **Partly fixed (see "second round" below): the race picture was brighter than the console's** after the exposure settles (clip 11.5-12.4 s vs ours 15 s
+  after releasing the grid freeze): road 42 vs 28, barrier 67 vs 53, building 107 vs 91, sky top R 129 vs 107: about
+  `console = ours^1.2` everywhere. Not the capture path: flat UI greys on the loading screen match (icon 80 vs 80,
+  white line 163 vs 162). Not the display ramp: ReGPU applies PGR3's table (0.5 -> 0.45), shots include it
+  (REGPU_NO_GAMMA changes them). So it is the game's exposure/tone chain. Its passes (frame end, race): 54077a9a
+  (log2 luminance x mask into 64x64) -> e81784d4 (16x16, 4x4) -> e9708945 (1x1) -> 22517658 (adaptation, 1x1 k_16_16_FLOAT
+  ping-pong 0D102000/0D103000, clamped to pc[2].x..pc[2].y) -> 6088543b (bloom 341x200) -> def7b5ea -> composite
+  **a7484f3b** (exposure = pc[0].x / (adapted + pc[3].x), bloom added). Next: read the adapted value live (ps edit with
+  the '@anchor|statement' form) and check log2 of 0 (ReGPU gives -FLT_MAX), the 7e3 scene range and the bloom.
+- Also seen: no "now playing" music panel in the countdown: music (WMA through XMP) isn't implemented (QUIRKS A4).
+  "LOADING ..." missing in our two loading-screen shots: the console's text blinks (absent in 2 of 5 clip frames),
+  not shown to be a bug.
+- Garage (user's second console clip, "View your cars" -> MORE -> Walk around this garage, NSX GT2; driven on
+  out/user-route through the debug server): geometry, textures, plates, wall pictures and camera motion blur match.
+  Same exposure problem, stronger: ours mean brightness 65 vs the console's ~48 (35-62 over the clip), 95th percentile
+  216 vs ~130, 3.7% clipped white; the window light patches on the beige back wall and floor blow out where the
+  console keeps them dim. Fixing the exposure chain is the next item for both.
+- **Exposure, second round ("keep fixing"):** new ReGPU patch **`regpu-tiny-pass-native-scale`** (102nd): surfaces of
+  pitch <= 80 px (PGR3: only the luminance reduction 64->16->4->1, pitch 80) drawn at 1:1 instead of the output's
+  scale. Live race, 720p, 2+2 interleaved vs the clip at 12.4 s (pre-ramp, per region): sky +0.050 -> +0.01, other
+  surfaces +0.05 -> +0.03..0.04; highlights/upper mids now match (152->147, 168->169, 199->201). **Left: the darks**
+  (our black ~10 vs the console's ~1, fading out by ~160). The garage did NOT change (mean 65.6 -> 66.2 vs the
+  clip's ~48; the window light on the back wall still blows out): its brightness comes from elsewhere (showroom
+  debug vars `Lighting|Show Room|Gamma`, `Gamma scale` suggest a path of its own).
+- **Measuring lesson: the frozen grid can't judge exposure.** The composite a7484f3b applies exposure + bloom only
+  under a predicate `p` that is 0 while time is frozen (checked by writing p to the output), so frozen-grid A/Bs of
+  exposure, bloom or the luminance chain show nothing; earlier "native vs 720p" frozen differences were noise.
+  Release the freeze (`env PGR3_FREEZE_TIME 0`), wait 15 s, shoot, compare to the clip at 12.4 s.
+- Ruled out for the brightness: the capture path (UI greys match), the display ramp (shots include it; flat
+  0.1/0.25/0.5 -> 12/48/115 at any resolution), fog (~0 near), bloom (removing it: <=0.006), sun glare / occlusion
+  queries (`REGPU_ZPD_SCALE` 0..1 live: no change), native vs CPU DXT decode, the ambient cube (faces sane), the
+  16x16 lighting table t11 @0ED2D000 (its bytes are real lighting data: zeroing them live turns buildings black;
+  restored), the tree-shadow multiply pass d0fbdf6f (vertex strength FFFFFFFF, texture 0.42..0.93).
+  `REGPU_NO_PACKED_CONSTANTS=1` gives translated shaders the game's real constant numbers (slow boot: every shader
+  recompiles and the route times out; drive it by pressing A).
+- Debugging lesson: the debug server's `ps HASH EXPR` replaces only the final return, **after** the alpha test and
+  alpha-to-mask discard, so a "tint" proves nothing for alpha-tested draws. Read the HLSL first.
 
 **State (end of session 5, 2026-11-20):** boot to race works, the London grid matches the console. Repo
 https://github.com/braaap-stututu/PGR3-ReGPU-recomp (public, main; session 5 committed and pushed: 221df65, ee9e608,
