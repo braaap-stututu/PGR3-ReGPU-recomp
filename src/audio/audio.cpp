@@ -85,8 +85,23 @@ struct Output : IXAudio2VoiceCallback
             Log("audio: could not create the output voice; sound is discarded");
             return;
         }
+        // Wine / Proton on a stereo device (the Deck): Windows' XAudio2 downmixes 5.1 with the fronts at full level, but
+        // Wine's (FAudio) scales every channel to about a third, so the game was far quieter than other apps. There the
+        // voice gets the Windows mix; Windows is left as is. From the FM2 port (Forza-Motorsport-2-ReGPU 2912e46/e45f333,
+        // its GitHub #20). PGR3_NO_STEREO_MIX=1 (at launch): Wine's own downmix.
+        const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+        const bool wine = ntdll && GetProcAddress(ntdll, "wine_get_version");
+        XAUDIO2_VOICE_DETAILS md{};
+        master->GetVoiceDetails(&md);
+        const bool remix = wine && md.InputChannels == 2 && !getenv("PGR3_NO_STEREO_MIX");
+        if (remix)
+        {
+            const float h = 0.7071f;
+            const float m[12] = { 1, 0, h, 0, h, 0, 0, 1, h, 0, 0, h }; // (rows L, R; columns FL FR C LFE BL BR)
+            voice->SetOutputMatrix(nullptr, kChannels, 2, m);
+        }
         ok = true;
-        Log("audio: output 5.1 float at %u Hz", kRate);
+        Log("audio: output 5.1 float at %u Hz (device %u channels)%s", kRate, md.InputChannels, remix ? ", mixed to stereo (Wine)" : "");
     }
 
     // PGR3_DUMP_AUDIO=<file.wav>: everything the title submits, played or not (PGR3_SILENT), as

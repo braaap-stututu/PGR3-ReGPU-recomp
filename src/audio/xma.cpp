@@ -65,6 +65,9 @@ std::atomic<int> g_traceBudget{ 200 }; // PGR3_TRACE_XMA lines for guard flushes
 // title's contexts change identity. Counted in the 5 s line; the first few offenders are written to files.
 std::atomic<uint64_t> g_errorPackets{ 0 }, g_dumps{ 0 }, g_bufferChanges{ 0 }, g_rateChanges{ 0 }, g_offsetWrites{ 0 };
 std::atomic<uint64_t> g_regKicks{ 0 }, g_regLocks{ 0 }, g_regClears{ 0 };
+// Why codecs are reset (Deck session 9: what a loop fix would remove): hardware loop passes, stream ends, the title
+// cancelling a context's buffers, context re-inits. (Discontinuities are g_guardFlushes.)
+std::atomic<uint64_t> g_loopBacks{ 0 }, g_streamEnds{ 0 }, g_cancels{ 0 }, g_reinits{ 0 }, g_seamlessLoops{ 0 }, g_startTrims{ 0 };
 std::atomic<int> g_idBudget{ 300 }; // lines for identity changes and clears
 constexpr uint32_t kRingPackets = 16, kMaxDumps = 40;
 thread_local bool t_errorSeen = false; // FFmpeg logged an error on this thread since it was last cleared
@@ -560,7 +563,41 @@ bool NoFrameStart(const uint8_t* p)
 }
 
 // The bits of the packet's last frame that run on into the next packet, or -1 if the packet cannot be walked.
+// Walked as FFmpeg decodes it (PGR4 ec98092's ParsePacket, Deck session 9): frames run until one's last bit says none
+// follows (WMA Pro's more_frames); the header's top 6 bits are no frame count in these streams. Read as one, the walk
+// stopped early, the spill matched no next packet, and the seek guard took ~400 sequential packets a second in a race
+// for jumps (a fresh codec each: "restart: buffer 0 packet 2 after packet 1"). PGR3_XMA_HEADER_FRAMES=1: as before.
+int SpillBitsHeaderCount(const uint8_t* p);
 int SpillBits(const uint8_t* p)
+{
+    static LiveSwitch headerFrames("PGR3_XMA_HEADER_FRAMES");
+    if (headerFrames)
+        return SpillBitsHeaderCount(p);
+    auto read = [p](unsigned at, unsigned n) {
+        unsigned v = 0;
+        for (unsigned i = 0; i < n; i++, at++)
+            v = v << 1 | ((p[at >> 3] >> (7 - (at & 7))) & 1);
+        return v;
+    };
+    if (NoFrameStart(p))
+        return -1;
+    unsigned pos = 32 + FirstFrameOffset(p); // (bits from the packet's start, header included)
+    for (int n = 0; pos < kPacketBits && n < 64; n++)
+    {
+        if (pos + 15 > kPacketBits)
+            return -1; // (its length straddles the packet end: not known here)
+        const unsigned length = read(pos, 15);
+        if (!length || length == 0x7FFF)
+            return -1;
+        pos += length;
+        if (pos > kPacketBits)
+            return int(pos - kPacketBits);
+        if (!read(pos - 1, 1))
+            return 0; // (the last frame: it ends in this packet)
+    }
+    return pos == kPacketBits ? 0 : -1;
+}
+int SpillBitsHeaderCount(const uint8_t* p)
 {
     constexpr unsigned dataBits = kPacketBits - 32;
     const unsigned frames = (uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | p[3]) >> 26;
@@ -579,6 +616,111 @@ int SpillBits(const uint8_t* p)
         return -1;
     return end > dataBits ? int(end - dataBits) : 0;
 }
+
+// The frames that start in a packet as FFmpeg decodes them (PGR4 ec98092's ParsePacket): positions in bits from the
+// packet's start (header included), up to the frame whose last bit ends the list; a frame whose 15-bit length straddles
+// the end starts here too (length 16384). runsOver: the last one continues in the next packet.
+uint32_t ParseFrames(const uint8_t* p, uint32_t* starts, uint32_t* lengths, uint32_t maxFrames, bool* runsOver = nullptr)
+{
+    auto read = [p](uint32_t at, uint32_t n) {
+        uint32_t v = 0;
+        for (uint32_t i = 0; i < n; i++, at++)
+            v = v << 1 | ((p[at >> 3] >> (7 - (at & 7))) & 1);
+        return v;
+    };
+    uint32_t pos = 32 + FirstFrameOffset(p), n = 0;
+    bool over = false;
+    while (pos < kPacketBits && n < maxFrames)
+    {
+        starts[n] = pos;
+        if (pos + 15 > kPacketBits)
+        {
+            lengths[n++] = kPacketBits;
+            over = true;
+            break;
+        }
+        const uint32_t length = read(pos, 15);
+        if (!length || length == 0x7FFF)
+            break;
+        lengths[n++] = length;
+        pos += length;
+        over = pos > kPacketBits;
+        if (!over && !read(pos - 1, 1))
+            break;
+    }
+    if (runsOver)
+        *runsOver = over;
+    return n;
+}
+
+// The start trim in a stream's first packet: a WMA Pro frame header can say how many samples the decoder drops at a
+// stream's start (and end); the hardware applies it, FFmpeg's XMA decoder doesn't (it takes trim_start + trim_end - 192
+// off the end instead). Adapted from PGR4-ReGPU's xma_trims.h (MIT, zer0ducksgiven): after the frame length come the
+// tile header (FFmpeg's decode_tilehdr: the subframe layout, 512 samples a frame, subframes down to 128), the channel
+// transform flags, the 8-bit DRC gain, then a flag and the 10-bit start and end trims. 0 when the packet has none.
+uint32_t StartTrim(const uint8_t* p, uint32_t channels)
+{
+    uint32_t pos = 0;
+    bool ok = true;
+    auto get = [&](uint32_t n) {
+        uint32_t v = 0;
+        for (uint32_t i = 0; i < n; i++, pos++)
+        {
+            if (pos >= kPacketBits)
+            {
+                ok = false;
+                return 0u;
+            }
+            v = v << 1 | ((p[pos >> 3] >> (7 - (pos & 7))) & 1);
+        }
+        return v;
+    };
+    if (NoFrameStart(p))
+        return 0;
+    pos = 32 + FirstFrameOffset(p);
+    const uint32_t length = get(15);
+    if (!length || length == 0x7FFF)
+        return 0;
+    const uint32_t nb = channels > 1 ? 2 : 1;
+    uint32_t samples[2] = {}, contains[2] = {}, forCur = nb;
+    int minLen = 0;
+    const bool fixed = get(1) != 0;
+    for (int guard = 0; ok && minLen < 512 && guard < 64; guard++)
+    {
+        for (uint32_t c = 0; c < nb; c++)
+            contains[c] = int(samples[c]) == minLen ? (fixed || forCur == 1 || minLen == 512 - 128 ? 1 : get(1)) : 0;
+        const int sub = minLen == 512 - 128 ? 128 : get(1) ? 512 >> (1 + get(1)) : 512;
+        minLen += sub;
+        for (uint32_t c = 0; c < nb; c++)
+        {
+            if (contains[c])
+                samples[c] += uint32_t(sub);
+            else if (int(samples[c]) <= minLen)
+            {
+                if (int(samples[c]) < minLen)
+                {
+                    forCur = 0;
+                    minLen = int(samples[c]);
+                }
+                forCur++;
+            }
+        }
+    }
+    if (nb > 1 && get(1) && get(1))
+        pos += nb * nb * 4;
+    get(8); // (DRC gain)
+    if (ok && get(1) && get(1))
+    {
+        const uint32_t v = get(10);
+        return ok ? v : 0;
+    }
+    return 0;
+}
+
+// FFmpeg's XMA2 output is the sequence of the frames fed (512 samples each), held back ~4.7k samples; the console's
+// sample for frame F, subframe s of that sequence is F * 512 + s * 128 - kHwLead (PGR4 ec98092, from the FM2 port's
+// XBDM measurement).
+constexpr uint64_t kHwLead = 384;
 
 struct Decoder
 {
@@ -640,20 +782,66 @@ struct Decoder
     size_t fadePos = 0;
     uint32_t fadeChannels = 0;
 
+    // Seamless loops (PGR4 ec98092, Deck session 9). A loop kept the codec reset at every pass: its overlap and the ~4.7k
+    // samples it holds back were lost, a hole of ~25 ms at each wrap (and a codec reopen, ~40 a second in a race). Now
+    // the codec carries on across a loop, as the hardware does, and the seam is cut from its output: rawOut counts its
+    // raw output, fedFrames the frames fed since it was fresh (kHwLead); loopGaps are [from, to) ranges of that output
+    // dropped: from the loop end frame's subframe end to the loop start frame's subframe skip. loopJump: the next packet
+    // is a loop's start (no seek-guard reset). PGR3_XMA_LOOP_FLUSH=1 (live): the reset at each pass, as before.
+    uint64_t rawOut = 0, fedFrames = 0, fedBefore = 0, dropUntil = 0; // (dropUntil: a stream start's trim, see Decode)
+    std::vector<std::pair<uint64_t, uint64_t>> loopGaps;
+    bool lastRunsOver = false, seamPending = false, loopJump = false;
+    uint64_t seamEnd = 0;
+    uint32_t seamFrame = 0, seamSkip = 0;
+    void NewSequence()
+    {
+        rawOut = fedFrames = fedBefore = dropUntil = 0;
+        loopGaps.clear();
+        lastRunsOver = seamPending = loopJump = false;
+    }
+    // Appends the decoded `frame` (less any loop seam in it).
+    void AppendFrame()
+    {
+        const int n = frame->nb_samples, ch = std::min<int>(frame->ch_layout.nb_channels, int(channels));
+        const uint64_t a = rawOut, b = rawOut + uint64_t(n);
+        std::pair<int, int> kept[8];
+        int ranges = 0;
+        uint64_t at = std::max(a, dropUntil);
+        for (const auto& [gapFrom, gapTo] : loopGaps)
+        {
+            if (at >= b || ranges == 7)
+                break;
+            if (gapTo <= at || gapFrom >= b)
+                continue;
+            if (gapFrom > at)
+                kept[ranges++] = { int(at - a), int(gapFrom - a) };
+            at = std::max(at, gapTo);
+        }
+        if (at < b)
+            kept[ranges++] = { int(at - a), int(b - a) };
+        rawOut = b;
+        while (!loopGaps.empty() && loopGaps.front().second <= rawOut)
+            loopGaps.erase(loopGaps.begin());
+        for (int r = 0; r < ranges; r++)
+        {
+            const auto [from, to] = kept[r];
+            const size_t base = pcm.size();
+            pcm.resize(base + size_t(to - from) * channels);
+            for (int c = 0; c < int(channels); c++)
+            {
+                const float* in = reinterpret_cast<const float*>(frame->extended_data[std::min(c, ch - 1)]);
+                for (int i = from; i < to; i++)
+                    pcm[base + size_t(i - from) * channels + c] = int16_t(std::clamp(in[i], -1.0f, 1.0f) * 32767.0f);
+            }
+        }
+    }
+
     // Appends what the codec has decoded.
     void Receive()
     {
         while (avcodec_receive_frame(av, frame) == 0)
         {
-            const int n = frame->nb_samples, ch = std::min<int>(frame->ch_layout.nb_channels, int(channels));
-            const size_t base = pcm.size();
-            pcm.resize(base + size_t(n) * channels);
-            for (int c = 0; c < int(channels); c++)
-            {
-                const float* in = reinterpret_cast<const float*>(frame->extended_data[std::min(c, ch - 1)]);
-                for (int i = 0; i < n; i++)
-                    pcm[base + size_t(i) * channels + c] = int16_t(std::clamp(in[i], -1.0f, 1.0f) * 32767.0f);
-            }
+            AppendFrame();
             av_frame_unref(frame);
         }
     }
@@ -731,6 +919,7 @@ struct Decoder
         used = false;
         lastBuffer = -1;
         pendingBits = -1;
+        NewSequence();
         return true;
     }
 
@@ -753,6 +942,7 @@ struct Decoder
         flush = false;
         lastBuffer = -1;
         pendingBits = -1;
+        NewSequence();
         g_codecReopens++;
         CAP_EVENT(ctx, "codec_replaced", "ch=%u;rate=%u", channels, rate);
         return true;
@@ -779,6 +969,7 @@ struct Decoder
         }
         flush = true;
         holdsTail = false;
+        g_streamEnds++;
     }
 
     // Decodes one 2 KB packet and appends its samples.
@@ -819,9 +1010,20 @@ struct Decoder
             if (used)
                 avcodec_flush_buffers(av); // (Reset replaces the codec before this unless PGR3_XMA_FLUSH_ONLY)
             flush = false;
+            NewSequence();
         }
         if (!used || wasFlush)
             headCount = streamPackets = 0; // a new stream (or pass) starts here
+        // A stream's own start on a fresh codec (its first packet, read from its first frame): the hardware drops the
+        // stream's start trim, which is the codec sequence's sample trim_start - kHwLead (PGR4 ec98092). Played, every
+        // sound start (~90 a second in a race) began with the encoder's lead-in. PGR3_XMA_NO_START_TRIM=1 (live): as before.
+        static LiveSwitch noStartTrim("PGR3_XMA_NO_START_TRIM");
+        if (!used && !music && !noStartTrim && info.packetIndex == 0 && info.readOffset % kPacketBits <= 32 + FirstFrameOffset(data))
+            if (const uint32_t trim = StartTrim(data, channels); trim > kHwLead)
+            {
+                dropUntil = trim - kHwLead;
+                g_startTrims++;
+            }
         if (headCount < kHeadPackets)
             headHashes[headCount++] = FullPacketHash(data);
         streamPackets++;
@@ -843,18 +1045,30 @@ struct Decoder
             lastBuffer = -1;
             return false;
         }
+        {
+            // The frames this packet adds to the codec's sequence (kHwLead), as FFmpeg counts them: a frame the last packet
+            // left unfinished is dropped when this one doesn't carry its rest. A pending loop seam starts at the loop start
+            // frame of this packet.
+            uint32_t st[64], len[64];
+            bool over = false;
+            const uint32_t frames = ParseFrames(data, st, len, 64, &over);
+            fedBefore = fedFrames;
+            if (lastRunsOver && !FirstFrameOffset(data) && fedFrames)
+                fedFrames--;
+            if (seamPending)
+            {
+                const int64_t start = int64_t(fedFrames + seamFrame) * 512 + int64_t(seamSkip) * 128 - int64_t(kHwLead);
+                if (start > int64_t(seamEnd))
+                    loopGaps.emplace_back(seamEnd, uint64_t(start));
+                seamPending = false;
+            }
+            fedFrames += frames;
+            lastRunsOver = over;
+        }
         int received;
         while ((received = avcodec_receive_frame(av, frame)) == 0)
         {
-            const int n = frame->nb_samples, ch = std::min<int>(frame->ch_layout.nb_channels, int(channels));
-            const size_t base = pcm.size();
-            pcm.resize(base + size_t(n) * channels);
-            for (int c = 0; c < int(channels); c++)
-            {
-                const float* in = reinterpret_cast<const float*>(frame->extended_data[std::min(c, ch - 1)]);
-                for (int i = 0; i < n; i++)
-                    pcm[base + size_t(i) * channels + c] = int16_t(std::clamp(in[i], -1.0f, 1.0f) * 32767.0f);
-            }
+            AppendFrame();
             av_frame_unref(frame);
         }
         BlendFade(pcmBefore);
@@ -958,6 +1172,7 @@ bool Step(uint32_t ctx)
             d.consumed[0] = d.consumed[1] = false;
             d.holdsTail = false;
             d.flush = true;
+            g_cancels++;
             d.fadeTail.clear();
         }
     }
@@ -1086,7 +1301,7 @@ bool Step(uint32_t ctx)
         // session. With the guard off for music it played (user, menus and races). PGR3_XMA_GUARD_MUSIC=1: guard it too.
         static LiveSwitch noGuardSwitch("PGR3_NO_XMA_SEEK_GUARD"), guardMusic("PGR3_XMA_GUARD_MUSIC");
         const bool noGuard = noGuardSwitch || (d.music && !guardMusic);
-        if (!noGuard && d.lastBuffer >= 0 && d.holdsTail && !d.flush)
+        if (!noGuard && d.lastBuffer >= 0 && d.holdsTail && !d.flush && !d.loopJump)
         {
             // The packets themselves decide when they can be read: the title restarts a context with another sound's
             // packets (often packet 1 of it) in the same input buffers at the same offsets, which no address or index shows.
@@ -1151,6 +1366,7 @@ bool Step(uint32_t ctx)
         else
         {
             const bool decoded = d.Decode(fed, info);
+            d.loopJump = false;
             if (decoded)
             {
                 d.lastBuffer = int(current), d.lastPacket = packet, d.lastCount = packets;
@@ -1176,7 +1392,39 @@ bool Step(uint32_t ctx)
             SetField(ctx, 0, 12, 8, loops - 1);
         SetField(ctx, 2, 0, 26, Field(ctx, 3, 0, 26));
         d.expectedOffset = Field(ctx, 2, 0, 26), d.haveExpected = true;
-        d.flush = true;
+        g_loopBacks++;
+        static LiveSwitch loopFlush("PGR3_XMA_LOOP_FLUSH");
+        if (loopFlush || d.music || !d.av)
+            d.flush = true;
+        else
+        {
+            // Seamless (see Decoder::loopGaps): the pass ends at the loop end frame's subframe end (dword 1 bits 12-13,
+            // PGR4's reading) and the next starts at the loop start frame's subframe skip (bits 17-19), in the packet fed
+            // next; the codec carries on, and what lies between them in its output is dropped.
+            const uint32_t loopStart = Field(ctx, 3, 0, 26);
+            uint32_t st[64], len[64];
+            const uint32_t n = ParseFrames(GuestPtr<uint8_t>(buffer + packet * kPacketBytes), st, len, 64);
+            int endFrame = -1;
+            for (uint32_t i = 0; i < n; i++)
+                if (packet * kPacketBits + st[i] == loopEnd)
+                    endFrame = int(i);
+            const uint32_t sn = ParseFrames(GuestPtr<uint8_t>(buffer + (loopStart / kPacketBits) * kPacketBytes), st, len, 64);
+            uint32_t startFrame = 0;
+            for (uint32_t i = 0; i < sn; i++)
+                startFrame += st[i] < loopStart % kPacketBits;
+            if (endFrame >= 0)
+            {
+                d.seamPending = true;
+                const int64_t end = int64_t(d.fedBefore + uint64_t(endFrame)) * 512 + int64_t(Field(ctx, 1, 12, 2)) * 128 - int64_t(kHwLead);
+                d.seamEnd = uint64_t(std::max<int64_t>(end, 0));
+                d.seamFrame = startFrame;
+                d.seamSkip = Field(ctx, 1, 17, 3);
+            }
+            else
+                LOG_ONCE("xma: %08X loop end %u is not a frame start in its packet: its seam is uncut", ctx, loopEnd);
+            d.loopJump = true;
+            g_seamlessLoops++;
+        }
         CAP_EVENT(ctx, "loop", "end_packet=%u;loop_start=%u;loops_left=%u", packet, Field(ctx, 3, 0, 26), loops);
         return true;
     }
@@ -1213,6 +1461,15 @@ void ReportStats()
             (unsigned long long)(cl - clears));
     if (const uint64_t ad = g_aheadDropped; ad != aheadSeen)
         Log("xma: 5 s: %llu decoded samples dropped unplayed at stream restarts", (unsigned long long)(ad - aheadSeen)), aheadSeen = ad;
+    {
+        static uint64_t lb0 = 0, se0 = 0, ca0 = 0, ri0 = 0, sl0 = 0, st0 = 0;
+        const uint64_t lb = g_loopBacks, se = g_streamEnds, ca = g_cancels, ri = g_reinits, sl = g_seamlessLoops, st = g_startTrims;
+        if (lb != lb0 || se != se0 || ca != ca0 || ri != ri0 || st != st0)
+            Log("xma: 5 s: %llu loop passes (%llu seamless, the rest reset), %llu stream starts trimmed, %llu stream ends, %llu title cancels, %llu re-inits",
+                (unsigned long long)(lb - lb0), (unsigned long long)(sl - sl0), (unsigned long long)(st - st0), (unsigned long long)(se - se0),
+                (unsigned long long)(ca - ca0), (unsigned long long)(ri - ri0));
+        lb0 = lb, se0 = se, ca0 = ca, ri0 = ri, sl0 = sl, st0 = st;
+    }
     static uint64_t fadesSeen = 0;
     if (const uint64_t lf = g_loopFades; lf != fadesSeen)
         Log("xma: 5 s: %llu stream restarts crossfaded", (unsigned long long)(lf - fadesSeen)), fadesSeen = lf;
@@ -1399,6 +1656,7 @@ GUEST_EXPORT(XMAInitializeContext)
         it->second.consumed[0] = it->second.consumed[1] = false;
         it->second.holdsTail = false;
         it->second.flush = true;
+        g_reinits++;
         it->second.pcm.clear();
         it->second.pcmRead = 0;
     }

@@ -1,3 +1,4 @@
+343252d Fence splits on the replay thread, worker priority, own index lock, dynamic hash outside the lock, VMA block size
 8fb74d8 PGR3 session 7: occlusion queries end on the A counters, triple-screen shared passes, keep depth, HUD over
 a52f6f7 Direct SPIR-V: acyclic programs with backward jumps run their blocks once in topological order
 ab62f93 Texture copies into the upload ring on 3 helper threads (REGPU_SYNC_TEXTURE_COPIES=1: on the draw thread)

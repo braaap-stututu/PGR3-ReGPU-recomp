@@ -14,6 +14,9 @@
 // containing one of those).
 void TraceImport(const char* name, PPCContext& ctx);
 void TraceImportReturn(const char* name, PPCContext& ctx);
+// PGR3_TRACE_IMPORTS set (runtime.cpp, read once at start): every import call goes through the tracer. Off, each call
+// costs only this test (Deck session 9, perf: the tracer's own checks were ~2% of a game worker thread; as the FM2 port).
+extern bool g_traceImports;
 // PGR3_TRACE_XAM=1 logs every XAM/XNotify/XUser/XMsg import with its arguments and result
 // (PGR3_TRACE_XAM_LIMIT calls per name, default 300; trace_xam.cpp).
 extern bool g_traceXam;
@@ -23,13 +26,13 @@ void TraceXamEnd(const char* name, PPCContext& ctx);
     static void Impl_##name(PPCContext& __restrict ctx, uint8_t* base); \
     PPC_FUNC(__imp__##name)                                         \
     {                                                               \
-        TraceImport(#name, ctx);                                    \
+        if (g_traceImports) TraceImport(#name, ctx);                                    \
         if (g_traceXam)                                             \
             TraceXamBegin(#name, ctx);                              \
         Impl_##name(ctx, base);                                     \
         if (g_traceXam)                                             \
             TraceXamEnd(#name, ctx);                                \
-        TraceImportReturn(#name, ctx);                              \
+        if (g_traceImports) TraceImportReturn(#name, ctx);                              \
     }                                                               \
     static void Impl_##name(PPCContext& __restrict ctx, uint8_t* base)
 

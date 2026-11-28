@@ -321,12 +321,21 @@ LONG CALLBACK OnWatchedWrite(EXCEPTION_POINTERS* info)
         // clears a page's bit and only then makes it writable, both under the exclusive lock; a write faulting between
         // the two found the page not armed and still read-only and was passed on as a crash (PGR3 race, guest thread 21
         // in sub_821B0AA8, once index buffers were watched too and pages were armed and disarmed far more often).
+        // Armed again by now is retried too (Deck session 9: the check above and this one were two lock holds, and a
+        // re-arm in between, read-only again with its bit set, was passed on as a crash: guest thread 23 in
+        // sub_821B0AA8, ~37 s into an AI race). The retry faults again and takes the armed path.
         AcquireSRWLockShared(&g_watchLock);
+        const bool armedNow = Armed(page);
         MEMORY_BASIC_INFORMATION mbi{};
-        const bool writable = VirtualQuery(at, &mbi, sizeof(mbi)) && (mbi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE));
+        const bool queried = VirtualQuery(at, &mbi, sizeof(mbi)) != 0;
+        const bool writable = queried && (mbi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE));
         ReleaseSRWLockShared(&g_watchLock);
-        if (!writable)
+        if (!writable && !armedNow)
+        {
+            Log("write watch: write to page %05X passed on (not armed, protect %lX, state %lX, query %d)", page,
+                queried ? mbi.Protect : 0, queried ? mbi.State : 0, int(queried));
             return EXCEPTION_CONTINUE_SEARCH;
+        }
     }
     return EXCEPTION_CONTINUE_EXECUTION;
 }

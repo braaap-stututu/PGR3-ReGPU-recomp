@@ -214,6 +214,12 @@ void ApplyPerfPreset(regpu::Config& c)
         DefaultEnv("REGPU_COMPILE_BACKGROUND_THREADS", t.c_str());
     if (const std::string t = s.Extra("igpu_texture_budget"); !t.empty()) // (session 43: ReGPU's texture budget, default 1024 MB)
         DefaultEnv("REGPU_TEXTURE_BUDGET_MB", t.c_str());
+    // GPU memory in 32 MB blocks (Deck session 9; ReGPU-V REGPU_VMA_BLOCK_MB, VMA's default 256 MB): a new block's
+    // allocation clears it, and a 256 MB one stalled the frame that streamed a texture into it by ~30 ms (a race's
+    // worst frames). Deck AI race, 2 x 200 s each, interleaved: 0.1% low 27.0 -> 33.8 fps, worst frame 46-55 -> 37 ms,
+    // 1% low 42.3 -> 44.2, average 79.9 -> 80.6. (64 MB measured the same; making blocks ahead on a helper thread
+    // didn't help: the frame still waited on it.) REGPU_VMA_BLOCK_MB=256: as before.
+    DefaultEnv("REGPU_VMA_BLOCK_MB", "32");
     // Culling blended draws (REGPU_HYPER_CULL_ALL, for FM2's blended cars) drops FM3's HUD text: blended, depth-tested
     // glyphs whose strokes cover ~70 guest pixels (session 43, REGPU_TRACE_HYPER_CULL). FM3 culls opaque draws only.
     DefaultEnv("REGPU_HYPER_CULL_ALL", "0");
@@ -323,10 +329,14 @@ void GpuStart()
     // index buffers read in place unless seen changing; indices 0.43 -> 0.16 ms) 110 -> 115.4; both
     // 108 -> 120. Driving: no stale textures or shadow flicker seen. PGR3_NO_DRAW_SHORTCUTS=1 leaves both
     // off; live: Fm3 "switch NAME 0|1".
+    // The stagger is OFF since Deck session 9: it was the cause of the brief race glitches (building parts vanishing,
+    // blue/purple faces, dark blotches, every lap). PGR3 streams scenery into reused memory, and a texture rechecked
+    // only every 4th/16th frame showed the previous texture's data there for a few frames. The user's capture-card
+    // A/B (tools/deck/race_ab.sh ab3/ab4: one switch per lap): stagger off -> no glitches, back on -> glitches.
+    // Cost on the Deck (Vulkan, 720p vsync 60): 58.8 -> 57.8 fps, draw thread 69 -> 68% busy; with the texture write
+    // watch, unchanged textures are answered without hashing anyway. REGPU_TEXTURE_CHECK_STAGGER=1 turns it back on.
     if (!getenv("PGR3_NO_DRAW_SHORTCUTS"))
     {
-        if (!getenv("REGPU_TEXTURE_CHECK_STAGGER"))
-            regpu::driver::SetSwitch("REGPU_TEXTURE_CHECK_STAGGER", true);
         if (!getenv("REGPU_DIRECT_DYNAMIC_INDICES"))
             regpu::driver::SetSwitch("REGPU_DIRECT_DYNAMIC_INDICES", true);
     }

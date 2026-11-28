@@ -1342,7 +1342,7 @@ index 53fea83..daa1632 100644
               "    float w = r.pos.w;\n"
               "    // (VTX_W0_FMT set means w is the true W0, the normal case.)\n"
 diff --git a/src/gpu/renderer.cpp b/src/gpu/renderer.cpp
-index f19fc25..3d8811e 100644
+index f19fc25..bdf4b4c 100644
 --- a/src/gpu/renderer.cpp
 +++ b/src/gpu/renderer.cpp
 @@ -639,6 +639,7 @@ bool g_stereoReplay = false; // the second eye's pass (no write-backs to guest m
@@ -1418,7 +1418,61 @@ index f19fc25..3d8811e 100644
  void ReleaseWithFrame(vk::Image& image); // (below)
  bool g_asyncFrameEnded = false; // the last frame's end was queued on the replay thread (REGPU_ASYNC_PRESENT)
  
-@@ -6200,6 +6245,8 @@ const CompiledShader& GetShaderLocked(uint64_t hash, const std::vector<uint32_t>
+@@ -4195,14 +4240,30 @@ bool DynamicBuffer(uint32_t address, uint32_t bytes)
+         return *a;
+     static std::unordered_map<uint64_t, Seen> seen;
+     static std::mutex mutex; // the draw workers (REGPU_DRAW_WORKERS) check buffers too
+-    std::lock_guard lock(mutex);
+-    Seen& s = seen[key];
++    std::unique_lock lock(mutex);
++    Seen* sp = &seen[key];
+     // Hashing is the cost: a buffer that stopped changing (static geometry, most of them) is
+     // checked every 16th frame, one that changes every frame.
+-    const bool due = s.frame == ~0ull || g_r.frame <= s.dynamicUntil || g_r.frame >= s.frame + 16;
++    const bool due = sp->frame == ~0ull || g_r.frame <= sp->dynamicUntil || g_r.frame >= sp->frame + 16;
++    uint64_t hash = 0;
++    if (sp->frame != g_r.frame && due)
++    {
++        // Hashed outside the lock (PGR4 8033301): the draw pieces otherwise queued behind one another's hashing of the
++        // buffers that change every frame. Two may both hash a buffer; the first to finish records it (the entry is
++        // looked up again: the map may have grown meanwhile). REGPU_DYNAMIC_HASH_LOCKED=1 (at launch): under the lock.
++        static const bool hashLocked = getenv("REGPU_DYNAMIC_HASH_LOCKED") != nullptr;
++        if (!hashLocked)
++            lock.unlock();
++        hash = ContentHash(GuestPtr<uint8_t>(GpuPhysToGuest(address)), bytes);
++        if (!hashLocked)
++        {
++            lock.lock();
++            sp = &seen[key];
++        }
++    }
++    Seen& s = *sp;
+     if (s.frame != g_r.frame && due)
+     {
+-        const uint64_t hash = ContentHash(GuestPtr<uint8_t>(GpuPhysToGuest(address)), bytes);
+         // A buffer seen changing once stays copied: one written in bursts (FH1's skid marks, appended
+         // while the car slides) went back to being read in place 120 frames after its last change and
+         // checked every 16th frame, so the next burst was read while the title wrote it (rare exploded
+@@ -5065,7 +5126,17 @@ bool GetIndexBuffer(uint32_t base, uint32_t count, bool is32, uint32_t endian, I
+     static LiveSwitch noWatch("REGPU_INDEX_NO_WATCH");
+     const bool watch = host.watchArm && host.watchClean && host.watchSeq && !noWatch && !sampledIndexHash && !C().worker;
+     const uint64_t hash = watch ? 0 : sampledIndexHash ? ContentHash(src, bytes) : FullHash(src, bytes);
+-    std::lock_guard textureLock(g_textureMutex);
++    // The index arena has a lock of its own (PGR4 591e573): under the texture mutex, the draw pieces queued behind one
++    // another's texture and bindless work for index buffers. Only this path and the frame end's FlushIndexCopies (no
++    // pieces running then) touch the arena. REGPU_INDEX_TEXTURE_LOCK=1 (at launch): the texture mutex, as before.
++    static std::mutex indexMutex;
++    static const bool textureLock = getenv("REGPU_INDEX_TEXTURE_LOCK") != nullptr;
++    std::unique_lock<std::recursive_mutex> sharedLock(g_textureMutex, std::defer_lock);
++    std::unique_lock<std::mutex> ownLock(indexMutex, std::defer_lock);
++    if (textureLock)
++        sharedLock.lock();
++    else
++        ownLock.lock();
+     g_indexChanging = false;
+     if (!GetIndexBufferLocked(base, count, is32, endian, view, hash, watch))
+         return false;
+@@ -6200,6 +6271,8 @@ const CompiledShader& GetShaderLocked(uint64_t hash, const std::vector<uint32_t>
          options.fetchBranches = DirectFetchBranches();
          if (TranslateSpirv(parsed, cs.info, words, why, options))
          {
@@ -1427,7 +1481,7 @@ index f19fc25..3d8811e 100644
              auto code = std::make_shared<SpirvCode>();
              code->words = std::move(words);
              cs.code = std::move(code);
-@@ -6222,6 +6269,8 @@ const CompiledShader& GetShaderLocked(uint64_t hash, const std::vector<uint32_t>
+@@ -6222,6 +6295,8 @@ const CompiledShader& GetShaderLocked(uint64_t hash, const std::vector<uint32_t>
              Log("spirv direct: %s %016llx falls back to HLSL: %s", pixel ? "ps" : "vs", (unsigned long long)hash, why.c_str());
      }
      cs.cacheKey = Fnv(cs.info.hlsl.data(), cs.info.hlsl.size(), pixel ? 1 : 2);
@@ -1436,7 +1490,7 @@ index f19fc25..3d8811e 100644
      if (auto b = g_bytecode.find(cs.cacheKey); b != g_bytecode.end())
      {
          cs.code = b->second;
-@@ -6498,6 +6547,25 @@ std::string NoKillVariant(const std::string& hlsl)
+@@ -6498,6 +6573,25 @@ std::string NoKillVariant(const std::string& hlsl)
      return h;
  }
  
@@ -1462,7 +1516,7 @@ index f19fc25..3d8811e 100644
  // A direct shader's variant (REGPU_SPIRV_DIRECT): translated again from the microcode with the variant's options, as
  // the HLSL path edits its text (~1 ms, so here, not on a compile worker). False: the variant takes the HLSL path.
  // REGPU_SPIRV_FETCH_BRANCHES=0|1 (start-time): SpirvOptions::fetchBranches; unset: on for integrated GPUs (whose vector
-@@ -6526,6 +6594,7 @@ bool DirectVariant(const CompiledShader& base, const SpirvOptions& options, Comp
+@@ -6526,6 +6620,7 @@ bool DirectVariant(const CompiledShader& base, const SpirvOptions& options, Comp
          LOG_ONCE("spirv direct: a variant of %s %016llx takes the HLSL path: %s", base.pixel ? "ps" : "vs", (unsigned long long)base.hash, why.c_str());
          return false;
      }
@@ -1470,7 +1524,7 @@ index f19fc25..3d8811e 100644
      auto code = std::make_shared<SpirvCode>();
      code->words = std::move(words);
      cs.code = std::move(code);
-@@ -8547,6 +8616,8 @@ GpuImage* GetTexture(const TextureFetch& fetch, VkFormat& format, bool& native)
+@@ -8547,6 +8642,8 @@ GpuImage* GetTexture(const TextureFetch& fetch, VkFormat& format, bool& native)
  // N2 (FM3 port session 43): REGPU_UMA_TEXTURES=1 wrote a new texture in place on a UMA GPU (D3D12's CPU-writable
  // custom heaps, WriteToSubresource), saving the upload ring's copy and the GPU copy. Measured 63 vs 65 fps on the
  // Radeon iGPU (opt-in); not on Vulkan (VK_EXT_host_image_copy would be the way): the switch is ignored.
@@ -1479,7 +1533,7 @@ index f19fc25..3d8811e 100644
  GpuImage* GetTextureLocked(const TextureFetch& fetch, VkFormat& format, bool& native)
  {
      TextureScope textureScope;
-@@ -8775,7 +8846,7 @@ GpuImage* GetTextureLocked(const TextureFetch& fetch, VkFormat& format, bool& na
+@@ -8775,7 +8872,7 @@ GpuImage* GetTextureLocked(const TextureFetch& fetch, VkFormat& format, bool& na
                  NoteTextureFailure("upload ring full (compressed)", fetch);
                  return nullptr;
              }
@@ -1488,7 +1542,7 @@ index f19fc25..3d8811e 100644
              CopyFromRing(*C().vkList, *cached.resource, offset, rowPitch, l, 0, lw, lh);
          }
          vk::Transition(*C().vkList, *cached.resource, vk::Use::Sampled);
-@@ -11315,6 +11386,7 @@ void Resolve()
+@@ -11315,6 +11412,7 @@ void Resolve()
          return;
  
      const uint32_t sourceSelect = control & 7;
@@ -1496,7 +1550,7 @@ index f19fc25..3d8811e 100644
      const uint64_t traceFrame = TraceFrame();
      // REGPU_TRACE_RESOLVES=1: every resolve (not just those of the traced frame), with its time.
      static LiveSwitch traceAllResolves("REGPU_TRACE_RESOLVES");
-@@ -12922,15 +12994,91 @@ std::mutex g_pendingMutex;
+@@ -12922,15 +13020,91 @@ std::mutex g_pendingMutex;
  
  // Submits the queued lists, then these.
  // Queues lists for the next submission (or submits them, with REGPU_NO_DEFER_LISTS).
@@ -1589,7 +1643,81 @@ index f19fc25..3d8811e 100644
      g_vkPendingLists.clear();
  }
  void QueueVkLists(uint32_t n, const VkCommandBuffer* lists)
-@@ -14461,9 +14609,38 @@ void ScanVrTag()
+@@ -13008,21 +13182,33 @@ void SplitMainList()
+ // queue submitted) by the replay thread when it gets there (vk::RecordedList::HandOffNew, which also begins the next
+ // buffer there: the pool is the replay's). Lists queued by the command processor itself go through the stream too
+ // (QueueInStream), so the order holds; whatever queues directly drains first (Real(), WaitForQueueIdle).
+-void SplitMainListAsync(bool submit)
++// With signal, the timeline is signalled to that value after the submission, on the replay thread too (PGR4 eb31e61;
++// every other signal drains the replay first, so the values stay in order).
++void QueueClosedSubmitAndSignal(VkCommandBuffer closed, void* ctx)
++{
++    QueueClosedAndSubmit(closed, ctx);
++    SignalFence(uint64_t(uintptr_t(ctx)));
++}
++void SplitMainListAsync(bool submit, uint64_t signal = 0)
+ {
+     static LiveSwitch sync("REGPU_SYNC_SPLITS"); // (A/B: wait for the replay as before)
+     if (sync)
+     {
+         SplitMainList();
+-        if (submit)
++        if (submit || signal)
+             SubmitVkLists(0, nullptr);
++        if (signal)
++            SignalFence(signal);
+         return;
+     }
+     FlushReadbackBarrier();
+     const bool queryOpen = g_occlusionOpen;
+     if (queryOpen)
+         EndOcclusionPart();
+-    g_r.vkRecorder.HandOffNew(AcquireVkListFor, &Frame(), submit ? QueueClosedAndSubmit : QueueClosed, nullptr);
++    if (signal)
++        g_r.vkRecorder.HandOffNew(AcquireVkListFor, &Frame(), QueueClosedSubmitAndSignal, reinterpret_cast<void*>(uintptr_t(signal)));
++    else
++        g_r.vkRecorder.HandOffNew(AcquireVkListFor, &Frame(), submit ? QueueClosedAndSubmit : QueueClosed, nullptr);
+     ListPrologue(g_r.vkRecorder);
+     g_drawState.Invalidate();
+     SelectSurfaces(true);
+@@ -13616,10 +13802,19 @@ uint64_t FenceSubmitImpl()
+     lastFrame = g_r.frame;
+     lastDraws = draws;
+     BeginFrameIfNeeded();
+-    SplitMainList();
+-    SubmitVkLists(0, nullptr); // (the signal must follow this fence's draws)
++    // The split, submission and signal are handed to the replay thread rather than waited for here (PGR4 eb31e61: the
++    // wait for the replay was ~2.6% of PGR4's command processor, the buffer's end ~1.7%). The fence writer waits on the
++    // value either way. REGPU_SYNC_FENCE_SPLITS=1 (live): waits as before.
++    static LiveSwitch syncSplit("REGPU_SYNC_FENCE_SPLITS");
+     lastValue = g_r.nextFence++;
+-    SignalFence(lastValue);
++    if (syncSplit)
++    {
++        SplitMainList();
++        SubmitVkLists(0, nullptr); // (the signal must follow this fence's draws)
++        SignalFence(lastValue);
++    }
++    else
++        SplitMainListAsync(true, lastValue);
+     if (FenceWritebacks())
+     {
+         // The write-backs recorded before this fence: the fence writer lands them before the fence.
+@@ -13722,6 +13917,13 @@ namespace
+ void WorkerMain()
+ {
+     SetThreadDescription(GetCurrentThread(), L"gpu draw piece worker");
++    // Above normal (PGR4 6adffd9): the command processor waits at each segment's end for the slowest piece, and a worker
++    // sharing its cores with the game's own threads finished late. REGPU_WORKER_PRIORITY=n (at launch, -2..2): this
++    // priority instead (0: normal, as before).
++    {
++        const char* priority = getenv("REGPU_WORKER_PRIORITY");
++        SetThreadPriority(GetCurrentThread(), priority ? std::clamp(atoi(priority), -2, 2) : THREAD_PRIORITY_ABOVE_NORMAL);
++    }
+     if (!g_profiledWorker)
+         DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &g_profiledWorker, 0, FALSE, DUPLICATE_SAME_ACCESS);
+     DrawContext ctx;
+@@ -14461,9 +14663,38 @@ void ScanVrTag()
      }
  }
  
@@ -1628,7 +1756,7 @@ index f19fc25..3d8811e 100644
      if (StereoHudDraw())
      {
          if (!g_stereoReplay)
-@@ -15415,7 +15592,7 @@ void DrawImpl(uint32_t initiator, uint32_t dmaBase, uint32_t dmaSize)
+@@ -15415,7 +15646,7 @@ void DrawImpl(uint32_t initiator, uint32_t dmaBase, uint32_t dmaSize)
          // Only draws that depth-test with a real compare and write depth (3D meshes, also blended ones that write depth
          // with CULL_ALL): a HUD's glyphs and menus redraw shared buffers with other contents every frame, and culling
          // them dropped FM3's HUD text (session 43).
@@ -1637,7 +1765,7 @@ index f19fc25..3d8811e 100644
              ((dc >> 4) & 7) != 7 && !(dc & 1) && (cullAll || opaque))
          {
              uint64_t key = 0xCBF29CE484222325ull;
-@@ -19023,6 +19200,17 @@ void RendererOnSwapImpl(uint64_t frameNumber, uint32_t frontBuffer)
+@@ -19023,6 +19254,17 @@ void RendererOnSwapImpl(uint64_t frameNumber, uint32_t frontBuffer)
          [](VkCommandBuffer cb, void* ctx) {
              AsyncEnd& e = *static_cast<AsyncEnd*>(ctx);
              regpu::xr::SetCaptureTag(e.vrTag);
@@ -1772,6 +1900,25 @@ index 53b8682..ab0ec3e 100644
              const auto tailOpen = [&] {
                  if (callsOnly || !parsedMore)
                      return false;
+diff --git a/src/gpu/vk/device.cpp b/src/gpu/vk/device.cpp
+index c865e7f..51eef35 100644
+--- a/src/gpu/vk/device.cpp
++++ b/src/gpu/vk/device.cpp
+@@ -651,6 +651,14 @@ void CreateDevice(Device& d, const std::filesystem::path& cacheDir, const HostDe
+     aci.physicalDevice = d.physical;
+     aci.device = d.device;
+     aci.pVulkanFunctions = &functions;
++    // REGPU_VMA_BLOCK_MB=n (at launch): VMA's block size for large heaps (default 256 MB). A new block's vkAllocateMemory
++    // clears it, and on a Steam Deck (RADV) a 256 MB block took ~30 ms, stalling the frame that streamed a texture into
++    // it, also when made ahead on another thread (PGR3, Deck session 9). Smaller blocks spread that cost.
++    if (const char* mb = getenv("REGPU_VMA_BLOCK_MB"); mb && atoi(mb) > 0)
++    {
++        aci.preferredLargeHeapBlockSize = VkDeviceSize(atoi(mb)) << 20;
++        Log("vk: VMA blocks of %d MB", atoi(mb));
++    }
+     aci.flags = (d.memoryBudget ? VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT : 0) |
+         (w12.bufferDeviceAddress ? VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT : 0);
+     Check(vmaCreateAllocator(&aci, &d.allocator), "vmaCreateAllocator");
 diff --git a/tools/deck/sensors.sh b/tools/deck/sensors.sh
 new file mode 100755
 index 0000000..ff62b80

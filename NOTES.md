@@ -1,5 +1,103 @@
 # PGR3 ReGPU: notes
 
+## Start here (session 10)
+
+**Session 9 (2026-11-27, Deck): the race glitches are fixed; a write-watch crash fixed.**
+- **Glitches (vanishing building parts, blue/purple faces, dark blotches, every lap): cause = `REGPU_TEXTURE_CHECK_STAGGER`**,
+  which src/gpu_host.cpp switched on by default (session 13 PC perf work, "+4%"). PGR3 streams scenery into reused
+  memory; a texture rechecked only every 4th/16th frame showed the previous texture's data for a few frames. Now OFF
+  by default (`REGPU_TEXTURE_CHECK_STAGGER=1` brings it back); `REGPU_DIRECT_DYNAMIC_INDICES` stays on.
+  Found with the user's capture-card A/B (tools/deck/race_ab.sh, one live switch per lap, London AI race):
+  - ab1: lap 2 `REGPU_SYNC_TEXTURE_COPIES=1`, lap 3 `REGPU_ZPD_STRICT_END=1` -> glitches in all 3 laps (both
+    session 8 suspects cleared).
+  - ab2: crashed before the first flip (below).
+  - ab3: lap 2 both draw shortcuts off -> clean; lap 3 shortcuts on + `REGPU_NO_VERTEX_ARENA=1` +
+    `REGPU_INDEX_NO_WATCH=1` -> bad (and 49 fps: the arena off is expensive).
+  - ab4: lap 2 only the stagger off -> clean; lap 3 stagger on, direct indices off -> glitches.
+  - ab5 (fixed build, nothing switched): the user saw no glitches. 57.6 fps avg, 1% low 34.6, 0.1% low 26.2
+    (ab1 with the stagger on: 57.6 / 32.9 / 19.7). Per-lap in ab4: 58.8 fps (on) vs 57.8 (off), draw thread 69 vs 68%.
+  - The D3D12 build shares src/gpu_host.cpp: it gets the same default at its next Windows build.
+- **Crash fix, src/memory.cpp OnWatchedWrite:** ab2 crashed ~37 s after GO (C0000005, write to guest AA491000, guest
+  thread 23, lr 821B0AB0 = sub_821B0AA8, the same site as the session 5 crash). The not-armed path checked "armed"
+  and "writable" in two separate lock holds; a re-arm in between (read-only again, bit set) was passed on as a crash.
+  Both are now read under one shared lock and an armed-again page is retried; a write still passed on logs
+  "write watch: write to page ... passed on" with its protection. Seen once in ~6 Deck races; ab3-ab5 ran clean.
+- out/shots/scan-base (4.4 GB of session 8 frames) deleted: no longer needed.
+- **PGR4 ports + lows work (user asked: port PGR4-ReGPU's optimisations, chase the remaining lows leads).** Upstream
+  github.com/zer0ducksgiven/PGR4-ReGPU at 24e0fa9 (26 Nov; reference/PGR4-ReGPU is the 8 Nov copy). Most of PGR4's
+  Nov work was already in ReGPU-V (vertex reach, ring chunks, reg/shader-repeat skips, NOP filter, CP idle sleep,
+  alpha-test split, GameSettled, NoInitAllocator). Ported into thirdparty/ReGPU-vk (branch pgr3vk, commit 343252d, pushed):
+  - fence submits on the replay thread (eb31e61; `REGPU_SYNC_FENCE_SPLITS=1` live = old), FenceSubmitImpl ->
+    SplitMainListAsync(true, value) + QueueClosedSubmitAndSignal;
+  - draw-piece workers above normal (6adffd9; `REGPU_WORKER_PRIORITY=n`);
+  - index buffers on their own lock (591e573; `REGPU_INDEX_TEXTURE_LOCK=1` = old);
+  - dynamic buffers hashed outside the lock (8033301; `REGPU_DYNAMIC_HASH_LOCKED=1` = old).
+  Deck bench (tools/deck/bench.sh, 1280x800 uncapped, 120 s, 3 interleaved pairs): 83.6 -> 84.2 fps, frames over
+  16.7 ms 435 -> 386, 1% low 45.5 -> 45.9. Kept. (The piece workers are ~1% busy on the Deck: little to win there.)
+  Not ported: Copy128 (FX-only), async frame end (no gain in PGR4), PGR4's pipeline seed (PGR3 has its own).
+- **Thread pinning (PGR4 de4c40e) as opt-in `PGR3_PIN=auto|m:..,c:..,*:..`** (src/kernel/thread.cpp): worse on the
+  Deck (2 x 200 s: 80.2 -> 78.9 fps, 1% low 43.8 -> 40.4): 4 cores and PGR3's draw thread. Stays off.
+- **Worst frames = VMA growing by a 256 MB block** (~30 ms vkAllocateMemory in the frame: VRAM +256 MB exactly at
+  each). Made-ahead on a helper thread was tried and dropped (the frame still stalled while it ran). Fix: ReGPU-V
+  `REGPU_VMA_BLOCK_MB` (vk/device.cpp), PGR3 defaults it to 32 (src/gpu_host.cpp). 2 x 200 s each, interleaved:
+  0.1% low 27.0 -> 33.8 fps, worst 46-55 -> 37 ms, 1% low 42.3 -> 44.2, avg 79.9 -> 80.6; biggest texture-create
+  stall 33 -> 3-6 ms (64 MB: about the same).
+- Per-thread CPU in an uncapped race (tools/deck/threads.py): draw thread 97%, game main 94%, audio driver 35% (the
+  game's mixer), xma decoder 26%, guest 25 28%, replay 21%. Both top threads are bound; audio is real work.
+- Final check at the user's settings (race_ab.sh final60, 720p vsync 60, no switches): 57.5 fps, 1% low 33.2,
+  0.1% low 26.1 (ab5 before the ports and 32 MB blocks: 57.6 / 34.6 / 26.2): vsync hides the gains. Its worst frames
+  are now the game's (58 ms with the draw thread idle 41 ms: waiting on the title) or the GPU (gpu wait 28 ms);
+  texture creation <= 1.5 ms. No crash.
+- **Audio (user: anything from FM2-ReGPU / PGR4 for PGR3's audio?).** FM2-ReGPU's source IS on the Deck:
+  `/home/deck/claude projects/ReGPU-V/work/Forza-Motorsport-2-ReGPU` (dckthulhu/Forza-Motorsport-2-ReGPU, 0.14.0;
+  the `FM2` folder is only an install). From it: **the Wine stereo mix** (src/audio/audio.cpp, FM2 2912e46/e45f333):
+  under Wine on a 2-channel device, FAudio's 5.1 downmix puts every channel at ~1/3 level; the voice now gets the
+  Windows matrix (fronts 1, centre/backs 0.707). The Deck reports 2 channels: active there (log "mixed to stereo
+  (Wine)"); the game should be ~3x louder than before. `PGR3_NO_STEREO_MIX=1` = Wine's mix. Not taken: FM2's
+  seamless_loops.h (a table from FM2's own banks), car_sound.cpp (FM2-specific); its codec-ahead pool is in PGR3.
+  src/audio/xma.cpp, all live switches:
+  - **Seek guard false positives fixed** (`SpillBits`): it read the packet header's top 6 bits as the frame count;
+    walked as FFmpeg does (PGR4's ParsePacket: until a frame's last bit says none follows), the spill matches. Before,
+    ~400 sequential packets a second ("restart: buffer 0 packet 2 after packet 1") got a fresh codec and dropped the
+    decoded audio ahead (~16k samples/s). `PGR3_XMA_HEADER_FRAMES=1` = old.
+  - **Seamless loops** (PGR4 ec98092's exact model, `kHwLead` 384): the codec carries on across a loop and the seam is
+    cut from its output (Decoder::loopGaps, rawOut/fedFrames; loop end subframe = dword 1 bits 12-13, skip 17-19, as
+    PGR4 found); the seek guard lets the loop start packet through (loopJump). `PGR3_XMA_LOOP_FLUSH=1` = old.
+  - **Stream start trims** (`StartTrim`, adapted from PGR4's xma_trims.h, MIT): a stream's own start drops
+    trim_start - 384 of the codec's output. ~60-100 starts a second trimmed in a race. `PGR3_XMA_NO_START_TRIM=1` = old.
+  - Reset causes are now counted in the 5 s xma line (loop passes / seamless / starts trimmed / ends / cancels / re-inits).
+  - Evidence (PGR3_AUDIO_CAPTURE_DIR captures, 45 s races; scratchpad loops.py): old: 69k packets decoded, 28k codec
+    replacements, 22k guard resets, 13k drop-aheads, and a 4-packet engine loop gave **768 samples per pass** (the loop
+    mostly thrown away); new: 42k packets, 0 replacements/resets/drops, every loop the same full length each pass
+    (e.g. 109,824 samples every pass of a 21-packet loop). 0 decode errors, 0 FFmpeg complaints, no uncut seams.
+  - **Speed** (3 interleaved pairs, 120 s uncapped): 84.7 -> 89.7 fps, 1% low 45.9 -> 50.5, 0.1% low 34.8 -> 39.5,
+    frames over 16.7 ms 397 -> 202. (Codec reopens 2,600 -> 0 per 5 s.)
+  - **Not yet heard: the user should listen to a race** (engine note, gear changes, crowd/ambience). If something
+    sounds wrong, A/B with the three switches above (live: debug server `switch NAME 1`).
+  - Not ported: PGR4's xma_lock register rotation (PGR3's log shows 0 lock polls: kernel API, quirk A2 doesn't apply),
+    XMP notification/hang fixes (no such hangs in PGR3), stream-end exact drain (0 stream ends in a race).
+- **More drains (user: after FM2, prod PGR3 for suspicious performance drains).** Profiled with Linux perf
+  (`tools/deck/profile.sh <label> [s]`: the AI race under perf through ReGPU-V/work/tools/perf-host, names from the
+  pdb, per-thread report in out/profile-<label>/report.txt; from the FM4/FM2 Deck work).
+  - **The game spun on GPU fences:** D3D's block-until-fence (sub_823D0B48) polling sub_823DEE80 was ~25% of the main
+    thread. `src/hooks/fence_wait.cpp`: a round that says "go on waiting" is followed by a 100 us sleep (Wine
+    nanosleep, regpu/wine_wait.h). Uncapped race, 3 clean interleaved pairs: 88.2 -> 89.6-89.9 fps, lows equal or
+    better; at a 60 cap the main thread 84% -> 50% of a core (total CPU about the same in that window).
+    `PGR3_FENCE_SPIN=1` (live): spin as before.
+  - **Import tracer checks** on every kernel import call (~2% of a worker): now an inline `g_traceImports` test
+    (kernel/imports.h; PGR3_TRACE_IMPORTS still works).
+  - Checked, fine: the audio mixer runs exactly 188 callbacks/s (no top-ups, nothing dropped); Wine ntdll ~4.6% of all
+    samples; the command processor's register log (memmove + LogRegs ~36% of that thread) is off the critical path.
+  - **Trap:** perf/llvm-symbolizer on a PDB name inlined code after its inline function, so `PPCCRRegister::compare`,
+    `simde_mm_*`, `gpureg::Get` in a report are not calls (no S_GPROC32 in the pdb; forcing them inline changed nothing:
+    tried in the FM2 work and reverted).
+  - Result (uncapped AI race, 1280x800 1x): 89.7 fps, 1% low 54.5, 0.1% low 43.2, worst 25.8 ms; no crash.
+- Left: the vsync-60 lows are mostly frames of 17-25 ms shown as 33 (GPU peaks ~21 ms/frame in heavy spots): a
+  40 fps mode, adaptive vsync or dynamic resolution would address that. The D3D12 build has none of the Vulkan-only
+  changes (fence splits etc. are ReGPU-V code; PGR4's D3D12 versions exist if the PC build wants them).
+- Open items now: the launcher's renderer setting still needs a Windows build (no .NET on the Deck); headlight
+  projection needs console night footage (see session 7).
+
 ## Start here (session 9)
 
 **Session 8 (2026-11-26): committed and pushed everything; Vulkan made the main renderer (D3D12 a launcher switch);

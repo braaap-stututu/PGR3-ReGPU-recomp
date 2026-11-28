@@ -182,6 +182,84 @@ void ApplyGuestThreadPriority(GuestThread& thread)
 
 namespace
 {
+// PGR3_PIN (PGR4 de4c40e, from FM2; opt-in here): affinity masks for guest threads, set as each one is created.
+// "auto": the main thread and the GPU command processor get a physical core each (both its logical processors), every
+// other guest thread the remaining cores (host threads are left alone: Wine has no CPU sets). Needs 4 cores or more.
+// "m:MASK,c:MASK,*:MASK" (hex) gives the main thread's, the command processor's and the rest's masks; "N:MASK" a
+// guest thread id's. Unset or "off": nothing pinned. (PGR4/FM2 on an FX-8350: ~+10%; the Deck has 4 cores and PGR3
+// also runs a draw thread and draw-piece workers, so it is measured before it is a default.)
+struct PinSpec
+{
+    std::unordered_map<uint32_t, uint64_t> masks;
+    uint64_t rest = 0, mainThread = 0, commandProcessor = 0;
+};
+
+PinSpec ParsePinSpec()
+{
+    PinSpec pin;
+    const char* spec = getenv("PGR3_PIN");
+    if (!spec || !*spec || !strcmp(spec, "off"))
+        return pin;
+    std::string autoSpec;
+    if (!strcmp(spec, "auto"))
+    {
+        DWORD bytes = 0;
+        GetLogicalProcessorInformationEx(RelationProcessorCore, nullptr, &bytes);
+        std::vector<uint8_t> buffer(bytes);
+        std::vector<uint64_t> cores;
+        if (bytes && GetLogicalProcessorInformationEx(RelationProcessorCore, reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(buffer.data()), &bytes))
+            for (DWORD at = 0; at < bytes;)
+            {
+                auto* info = reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(buffer.data() + at);
+                if (info->Processor.GroupMask[0].Group == 0)
+                    cores.push_back(info->Processor.GroupMask[0].Mask);
+                at += info->Size;
+            }
+        if (cores.size() < 4)
+        {
+            Log("pin: auto needs 4 cores, found %zu", cores.size());
+            return pin;
+        }
+        uint64_t rest = 0;
+        for (size_t i = 2; i < cores.size(); i++)
+            rest |= cores[i];
+        char s[96];
+        snprintf(s, sizeof(s), "m:%llX,c:%llX,*:%llX", (unsigned long long)cores[0], (unsigned long long)cores[1], (unsigned long long)rest);
+        autoSpec = s;
+        spec = autoSpec.c_str();
+    }
+    Log("pin: %s", spec);
+    for (const char* p = spec; *p;)
+    {
+        const char key = *p == '*' || *p == 'c' || *p == 'm' ? *p : 0;
+        char* end;
+        const uint32_t id = key ? 0 : uint32_t(strtoul(p, &end, 10));
+        p = key ? p + 1 : end;
+        if (*p != ':')
+            break;
+        const uint64_t mask = strtoull(p + 1, &end, 16);
+        p = end;
+        (key == '*' ? pin.rest : key == 'c' ? pin.commandProcessor : key == 'm' ? pin.mainThread : pin.masks[id]) = mask;
+        if (*p == ',')
+            ++p;
+    }
+    return pin;
+}
+
+void PinGuestThread(GuestThread& t)
+{
+    static const PinSpec pin = ParsePinSpec();
+    auto it = pin.masks.find(t.id);
+    const uint64_t mask = it != pin.masks.end() ? it->second
+        : pin.commandProcessor && t.name == "gpu command processor" ? pin.commandProcessor
+        : pin.mainThread && t.name == "main" ? pin.mainThread
+        : pin.rest;
+    if (!mask)
+        return;
+    const bool ok = SetThreadAffinityMask(t.hostHandle, DWORD_PTR(mask)) != 0;
+    Log("pin: t%u %s -> %llX (%s)", t.id, t.name.c_str(), (unsigned long long)mask, ok ? "ok" : "failed");
+}
+
 std::shared_ptr<ThreadObject> StartThread(uint32_t entry, uint32_t param, uint32_t xapiStartup, uint32_t stackSize,
     bool suspended, const char* name, std::function<void(PPCContext&)> hostEntry)
 {
@@ -211,6 +289,7 @@ std::shared_ptr<ThreadObject> StartThread(uint32_t entry, uint32_t param, uint32
         Fatal("CreateThread failed (%lu)", GetLastError());
     }
     object->thread->hostHandle = handle;
+    PinGuestThread(*object->thread);
     // A priority the title set before the host thread existed.
     if (object->thread->basePriority != 0)
         ApplyGuestThreadPriority(*object->thread);

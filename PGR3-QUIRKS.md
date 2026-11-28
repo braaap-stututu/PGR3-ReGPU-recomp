@@ -46,7 +46,7 @@ PGR4/FM3 runtime, and 22 `Vd*` calls are handled inside ReGPU. The rest:
 | # | Quirk | Source | Status |
 |---|---|---|---|
 | A1 | No FMOD: XACT `.xwb` wave banks loaded by the game's own `WaveBank::Load`, played through XAUD (XAudio render driver) | strings, disc | seen |
-| A2 | XMA context lock register `0x7FEA1818` must rotate through context IDs or the game resets the hardware | PGR4 `xma_lock.cpp` | unknown; may not apply if K1's kernel API is used |
+| A2 | XMA context lock register `0x7FEA1818` must rotate through context IDs or the game resets the hardware | PGR4 `xma_lock.cpp` | **doesn't apply** (Deck session 9: the xma 5 s line counts 0 lock polls in a race; PGR3 uses K1's kernel API) |
 | A3 | XMA contexts may hold physical addresses (PGR4) or virtual (FM2) | PGR4/FM2 | unknown |
 | A4 | Music: WMA through XMP (`Cannot create XMP source voice`); capture callback wants big-endian interleaved float | PGR4 `xmp.cpp` | **fixed** (session 6): `src/audio/xmp.cpp` (own player: FFmpeg avformat/wmav2/mp3 -> 48 kHz, 256-frame BE float blocks to the game's callback); PGR3 sends its requests three ways: XMsgInProcessCall, **XMsgStartIORequest** (playlists) and **XMsgSystemProcessCall** (play: was an unimplemented import). Countdown "now playing" panel back. `PGR3_NO_XMP`, `PGR3_TRACE_XMP` |
 

@@ -148,6 +148,8 @@ namespace
 thread_local const char* t_tracedImport = nullptr; // the import whose call was just logged (nesting: the innermost)
 }
 
+bool g_traceImports = getenv("PGR3_TRACE_IMPORTS") != nullptr;
+
 void TraceImport(const char* name, PPCContext& ctx)
 {
     static const double after = getenv("PGR3_TRACE_IMPORTS") ? atof(getenv("PGR3_TRACE_IMPORTS")) : -1;
